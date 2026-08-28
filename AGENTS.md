@@ -4,7 +4,7 @@
 
 - Feature specs live in `specs/`; implementation tickets live in `tickets/`.
 - Treat each spec as a feature track. Work one ticket at a time.
-- Current active ticket: `tickets/001-backend-ipc-foundation.md`.
+- Current ticket until the next one is created: `tickets/001-backend-ipc-foundation.md`.
 - Keep the existing CLI/OBS/BlackHole MVP working while building the native macOS app track.
 
 ## Engineering style

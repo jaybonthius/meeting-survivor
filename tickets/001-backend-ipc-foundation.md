@@ -1,6 +1,6 @@
 # Ticket 001: Backend IPC foundation
 
-Status: `ready`
+Status: `implemented`
 
 Spec: [`specs/002-native-macos-app.md`](../specs/002-native-macos-app.md)
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from .audio import list_audio_devices
 from .avatar import prepare_avatar
+from .backend import run_backend
 from .live import RunOptions, run_camera
 from .models import MODEL_REPOS
 
@@ -23,6 +24,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("list-devices", help="print audio input/output devices")
+
+    backend = sub.add_parser("backend", help="run structured local IPC backend")
+    backend.add_argument("--socket", type=Path, required=True, help="Unix domain socket path")
+    backend.add_argument("--app-support", type=Path, required=True, help="app-owned state directory")
 
     prep = sub.add_parser("prepare", help="prepare an avatar from a 720p/25fps source video")
     prep.add_argument("video", type=Path)
@@ -63,6 +68,10 @@ def main(argv: list[str] | None = None) -> None:
     try:
         if args.command == "list-devices":
             print(list_audio_devices())
+            return
+
+        if args.command == "backend":
+            run_backend(args.socket, args.app_support)
             return
 
         if args.command == "prepare":

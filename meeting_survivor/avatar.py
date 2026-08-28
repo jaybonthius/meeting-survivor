@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import time
+import threading
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import numpy as np
@@ -14,29 +16,61 @@ from .upstream import ensure_prep_weights, import_upstream_utils
 
 RESIZED_FACE = 256
 COORD_PLACEHOLDER = [0.0, 0.0, 0.0, 0.0]
+ProgressCallback = Callable[[str, int, int], None]
+
+
+class AvatarPreparationCancelled(Exception):
+    pass
 
 
 def _safe_name(path: Path) -> str:
     return path.stem.replace(" ", "_")
 
 
-def _extract_frames(video_path: Path, frames_dir: Path, limit: int) -> tuple[list[np.ndarray], list[str]]:
+def _raise_if_cancelled(cancel_event: threading.Event | None) -> None:
+    if cancel_event is not None and cancel_event.is_set():
+        raise AvatarPreparationCancelled("operation cancelled")
+
+
+def _emit_progress(progress_callback: ProgressCallback | None, stage: str, current: int, total: int) -> None:
+    if progress_callback is not None:
+        progress_callback(stage, current, total)
+
+
+def _extract_frames(
+    video_path: Path,
+    frames_dir: Path,
+    limit: int,
+    progress_callback: ProgressCallback | None = None,
+    cancel_event: threading.Event | None = None,
+    show_progress: bool = True,
+) -> tuple[list[np.ndarray], list[str]]:
     cap = cv2.VideoCapture(str(video_path))
     frames: list[np.ndarray] = []
     rel_paths: list[str] = []
-    for idx in track(range(limit), description="Extracting frames"):
-        ok, frame = cap.read()
-        if not ok:
-            break
-        name = f"frame_{idx:06d}.png"
-        cv2.imwrite(str(frames_dir / name), frame)
-        frames.append(frame)
-        rel_paths.append(f"frames/{name}")
-    cap.release()
+    try:
+        for idx in track(range(limit), description="Extracting frames", disable=not show_progress):
+            _raise_if_cancelled(cancel_event)
+            ok, frame = cap.read()
+            if not ok:
+                break
+            name = f"frame_{idx:06d}.png"
+            cv2.imwrite(str(frames_dir / name), frame)
+            frames.append(frame)
+            rel_paths.append(f"frames/{name}")
+            _emit_progress(progress_callback, "extractFrames", idx + 1, limit)
+    finally:
+        cap.release()
     return frames, rel_paths
 
 
-def _landmarks_and_boxes(frames: list[np.ndarray], bbox_shift: int) -> list[list[int]]:
+def _landmarks_and_boxes(
+    frames: list[np.ndarray],
+    bbox_shift: int,
+    progress_callback: ProgressCallback | None = None,
+    cancel_event: threading.Event | None = None,
+    show_progress: bool = True,
+) -> list[list[int]]:
     import_upstream_utils(allow_download=False)
     from face_detection import FaceAlignment, LandmarksType
     from rtmlib import Wholebody
@@ -53,12 +87,15 @@ def _landmarks_and_boxes(frames: list[np.ndarray], bbox_shift: int) -> list[list
     fa = FaceAlignment(LandmarksType._2D, flip_input=False, device="cpu")
 
     boxes: list[list[int]] = []
-    for idx, frame in track(list(enumerate(frames)), description="Detecting face landmarks"):
+    total = len(frames)
+    for idx, frame in track(list(enumerate(frames)), description="Detecting face landmarks", disable=not show_progress):
+        _raise_if_cancelled(cancel_event)
         kpts, _ = pose(frame)
         bbox = fa.get_detections_for_batch(np.asarray([frame]))[0]
         if bbox is None or len(kpts) == 0:
             boxes.append(COORD_PLACEHOLDER.copy())
             logging.warning("no face landmarks for frame %s", idx)
+            _emit_progress(progress_callback, "landmarks", idx + 1, total)
             continue
         face_landmark = kpts[0][23:91].astype(np.int32)
         half_face_coord = face_landmark[29].copy()
@@ -75,6 +112,7 @@ def _landmarks_and_boxes(frames: list[np.ndarray], bbox_shift: int) -> list[list
             boxes.append([int(v) for v in bbox])
         else:
             boxes.append([x1, y1, x2, y2])
+        _emit_progress(progress_callback, "landmarks", idx + 1, total)
     return boxes
 
 
@@ -121,6 +159,9 @@ def prepare_avatar(
     parsing_mode: str = "jaw",
     left_cheek_width: int = 90,
     right_cheek_width: int = 90,
+    progress_callback: ProgressCallback | None = None,
+    cancel_event: threading.Event | None = None,
+    show_progress: bool = True,
 ) -> Path:
     video_path = video_path.expanduser().resolve()
     if not video_path.exists():
@@ -148,15 +189,16 @@ def prepare_avatar(
     if max_seconds:
         limit = min(limit, int(max_seconds * max(fps, 25)))
 
+    _raise_if_cancelled(cancel_event)
     ensure_prep_weights(allow_download=download_model)
     import_upstream_utils(allow_download=download_model)
 
-    frames, frame_paths = _extract_frames(video_path, frames_dir, limit)
+    frames, frame_paths = _extract_frames(video_path, frames_dir, limit, progress_callback, cancel_event, show_progress)
     if not frames:
         raise RuntimeError("No frames extracted")
     logging.info("extracted %s avatar frames", len(frames))
 
-    boxes = _landmarks_and_boxes(frames, bbox_shift=bbox_shift)
+    boxes = _landmarks_and_boxes(frames, bbox_shift=bbox_shift, progress_callback=progress_callback, cancel_event=cancel_event, show_progress=show_progress)
     for i, (box, frame) in enumerate(zip(boxes, frames)):
         if not _valid_box(box):
             continue
@@ -164,13 +206,16 @@ def prepare_avatar(
         boxes[i] = [int(v) for v in box]
 
     crop_paths: list[str] = []
-    for idx, (frame, box) in track(list(enumerate(zip(frames, boxes))), description="Writing face crops"):
+    for idx, (frame, box) in track(list(enumerate(zip(frames, boxes))), description="Writing face crops", disable=not show_progress):
+        _raise_if_cancelled(cancel_event)
         if not _valid_box(box):
+            _emit_progress(progress_callback, "crops", idx + 1, len(frames))
             continue
         crop = crop_resize(frame, box)
         name = f"crop_{idx:06d}.png"
         cv2.imwrite(str(crops_dir / name), crop)
         crop_paths.append(f"crops/{name}")
+        _emit_progress(progress_callback, "crops", idx + 1, len(frames))
 
     masks: list[np.ndarray | None] = []
     mask_boxes: list[list[int] | None] = []
@@ -181,16 +226,19 @@ def prepare_avatar(
         from musetalk.utils.face_parsing import FaceParsing
 
         fp = FaceParsing(left_cheek_width=left_cheek_width, right_cheek_width=right_cheek_width)
-        for idx, (frame, box) in track(list(enumerate(zip(frames, boxes))), description="Preparing blend masks"):
+        for idx, (frame, box) in track(list(enumerate(zip(frames, boxes))), description="Preparing blend masks", disable=not show_progress):
+            _raise_if_cancelled(cancel_event)
             if not _valid_box(box):
                 masks.append(None)
                 mask_boxes.append(None)
+                _emit_progress(progress_callback, "masks", idx + 1, len(frames))
                 continue
             mask, crop_box = get_image_prepare_material(frame, box, fp=fp, mode=parsing_mode)
             name = f"mask_{idx:06d}.png"
             cv2.imwrite(str(masks_dir / name), mask)
             masks.append(mask)
             mask_boxes.append([int(v) for v in crop_box])
+            _emit_progress(progress_callback, "masks", idx + 1, len(frames))
 
     metadata = {
         "source_video": str(video_path),
@@ -217,12 +265,15 @@ def prepare_avatar(
         resolved_weights = ensure_weights(precision, weights_dir, allow_download=download_model)
         pipe = load_pipeline(resolved_weights)
         latents = []
-        for i, (frame, box) in track(list(enumerate(zip(frames, boxes))), description="Encoding MuseTalk latents"):
+        for i, (frame, box) in track(list(enumerate(zip(frames, boxes))), description="Encoding MuseTalk latents", disable=not show_progress):
+            _raise_if_cancelled(cancel_event)
             if not _valid_box(box):
+                _emit_progress(progress_callback, "latents", i + 1, len(frames))
                 continue
             crop = crop_resize(frame, box)
             latent = pipe.get_latents_for_unet(crop)
             latents.append(np.array(latent))
+            _emit_progress(progress_callback, "latents", i + 1, len(frames))
         if not latents:
             raise RuntimeError("No valid face crops found")
         np.save(avatar_dir / "latents.npy", np.concatenate(latents, axis=0))

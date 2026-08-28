@@ -15,6 +15,34 @@ def list_audio_devices() -> str:
     return str(sd.query_devices())
 
 
+def list_audio_devices_data() -> list[dict]:
+    devices = sd.query_devices()
+    host_apis = sd.query_hostapis()
+    default_input, default_output = sd.default.device
+    records = []
+    for index, info in enumerate(devices):
+        host_api_index = int(info.get("hostapi", -1))
+        host_api = host_apis[host_api_index]["name"] if 0 <= host_api_index < len(host_apis) else None
+        max_input = int(info.get("max_input_channels", 0))
+        max_output = int(info.get("max_output_channels", 0))
+        records.append(
+            {
+                "id": str(index),
+                "index": index,
+                "name": str(info.get("name", "")),
+                "hostApi": host_api,
+                "maxInputChannels": max_input,
+                "maxOutputChannels": max_output,
+                "defaultSampleRate": float(info.get("default_samplerate", 0.0)),
+                "isInput": max_input > 0,
+                "isOutput": max_output > 0,
+                "isDefaultInput": index == default_input,
+                "isDefaultOutput": index == default_output,
+            }
+        )
+    return records
+
+
 def mono_float32(samples: np.ndarray) -> np.ndarray:
     arr = np.asarray(samples, dtype=np.float32)
     if arr.ndim == 2:
