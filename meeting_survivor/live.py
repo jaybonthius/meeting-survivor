@@ -118,15 +118,8 @@ def run_camera(opts: RunOptions) -> dict:
                     frames_from_end = max(0, int(round(opts.delay_ms / 1000.0 * 25)))
                     chunk = _audio_chunk_from_pcm16k(pipe, audio_payload, frames_from_end=frames_from_end).astype(dtype)
                 face = pipe.generate_faces(latent, chunk)[0]
-                rendered = composite_face(
-                    frames[frame_idx],
-                    face,
-                    meta["boxes"][frame_idx],
-                    masks[frame_idx],
-                    meta["mask_boxes"][frame_idx],
-                )
                 try:
-                    results.put_nowait((frame_idx, rendered, time.monotonic() - started))
+                    results.put_nowait((frame_idx, face, time.monotonic() - started))
                 except queue.Full:
                     pass
             except Exception:
@@ -167,7 +160,7 @@ def run_camera(opts: RunOptions) -> dict:
         cv2.resizeWindow("meeting-survivor", int(meta.get("width", 1280)), int(meta.get("height", 720)))
 
     gate = SpeechGate(opts.vad_threshold)
-    latest_generated = None
+    latest_face = None
     latest_render_time = 0.0
     started_at = time.monotonic()
     next_tick = started_at
@@ -197,12 +190,12 @@ def run_camera(opts: RunOptions) -> dict:
 
             speaking = gate.update(rms)
             if not speaking:
-                latest_generated = None
+                latest_face = None
             while True:
                 try:
-                    result_idx, rendered, render_time = results.get_nowait()
+                    result_idx, face, render_time = results.get_nowait()
                     if speaking:
-                        latest_generated = rendered
+                        latest_face = face
                     latest_render_time = render_time
                     stats["generated"] += 1
                 except queue.Empty:
@@ -219,8 +212,8 @@ def run_camera(opts: RunOptions) -> dict:
                 except queue.Full:
                     stats["dropped_jobs"] += 1
 
-            if speaking and latest_generated is not None:
-                out = latest_generated
+            if speaking and latest_face is not None:
+                out = composite_face(frame, latest_face, meta["boxes"][source_idx], masks[source_idx], meta["mask_boxes"][source_idx])
             else:
                 out = frame
 
