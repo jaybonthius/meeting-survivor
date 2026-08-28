@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+models/
+avatars/
+outputs/
+third_party/
+recording_*.mov

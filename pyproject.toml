@@ -1,0 +1,33 @@
+[project]
+name = "meeting-survivor"
+version = "0.1.0"
+description = "Local MuseTalk/MLX talking-head camera preview for OBS Virtual Camera"
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "huggingface-hub>=0.24",
+  "musetalk-mlx @ git+https://github.com/xocialize/musetalk-mlx.git@c6eb30ebd1ed4d043983209813370153de9346bf",
+  "numpy>=1.26",
+  "opencv-contrib-python>=4.9,<5",
+  "opencv-python>=4.9,<5",
+  "onnxruntime>=1.18",
+  "pillow>=10",
+  "rtmlib>=0.0.13",
+  "sounddevice>=0.4.6",
+  "soundfile>=0.12",
+  "torch>=2.3",
+  "torchvision>=0.18",
+]
+
+[project.scripts]
+meeting-survivor = "meeting_survivor.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+
+[tool.hatch.metadata]
+allow-direct-references = true
