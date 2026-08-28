@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from rich.progress import track
 
 from .models import ensure_weights, load_pipeline, write_pin_file
 from .upstream import ensure_prep_weights, import_upstream_utils
@@ -23,8 +24,7 @@ def _extract_frames(video_path: Path, frames_dir: Path, limit: int) -> tuple[lis
     cap = cv2.VideoCapture(str(video_path))
     frames: list[np.ndarray] = []
     rel_paths: list[str] = []
-    idx = 0
-    while idx < limit:
+    for idx in track(range(limit), description="Extracting frames"):
         ok, frame = cap.read()
         if not ok:
             break
@@ -32,7 +32,6 @@ def _extract_frames(video_path: Path, frames_dir: Path, limit: int) -> tuple[lis
         cv2.imwrite(str(frames_dir / name), frame)
         frames.append(frame)
         rel_paths.append(f"frames/{name}")
-        idx += 1
     cap.release()
     return frames, rel_paths
 
@@ -54,7 +53,7 @@ def _landmarks_and_boxes(frames: list[np.ndarray], bbox_shift: int) -> list[list
     fa = FaceAlignment(LandmarksType._2D, flip_input=False, device="cpu")
 
     boxes: list[list[int]] = []
-    for idx, frame in enumerate(frames):
+    for idx, frame in track(list(enumerate(frames)), description="Detecting face landmarks"):
         kpts, _ = pose(frame)
         bbox = fa.get_detections_for_batch(np.asarray([frame]))[0]
         if bbox is None or len(kpts) == 0:
@@ -165,7 +164,7 @@ def prepare_avatar(
         boxes[i] = [int(v) for v in box]
 
     crop_paths: list[str] = []
-    for idx, (frame, box) in enumerate(zip(frames, boxes)):
+    for idx, (frame, box) in track(list(enumerate(zip(frames, boxes))), description="Writing face crops"):
         if not _valid_box(box):
             continue
         crop = crop_resize(frame, box)
@@ -182,7 +181,7 @@ def prepare_avatar(
         from musetalk.utils.face_parsing import FaceParsing
 
         fp = FaceParsing(left_cheek_width=left_cheek_width, right_cheek_width=right_cheek_width)
-        for idx, (frame, box) in enumerate(zip(frames, boxes)):
+        for idx, (frame, box) in track(list(enumerate(zip(frames, boxes))), description="Preparing blend masks"):
             if not _valid_box(box):
                 masks.append(None)
                 mask_boxes.append(None)
@@ -192,8 +191,6 @@ def prepare_avatar(
             cv2.imwrite(str(masks_dir / name), mask)
             masks.append(mask)
             mask_boxes.append([int(v) for v in crop_box])
-            if (idx + 1) % 25 == 0:
-                logging.info("prepared masks %s/%s", idx + 1, len(frames))
 
     metadata = {
         "source_video": str(video_path),
@@ -220,14 +217,12 @@ def prepare_avatar(
         resolved_weights = ensure_weights(precision, weights_dir, allow_download=download_model)
         pipe = load_pipeline(resolved_weights)
         latents = []
-        for i, (frame, box) in enumerate(zip(frames, boxes)):
+        for i, (frame, box) in track(list(enumerate(zip(frames, boxes))), description="Encoding MuseTalk latents"):
             if not _valid_box(box):
                 continue
             crop = crop_resize(frame, box)
             latent = pipe.get_latents_for_unet(crop)
             latents.append(np.array(latent))
-            if (i + 1) % 25 == 0:
-                logging.info("encoded latents %s/%s", i + 1, len(frames))
         if not latents:
             raise RuntimeError("No valid face crops found")
         np.save(avatar_dir / "latents.npy", np.concatenate(latents, axis=0))

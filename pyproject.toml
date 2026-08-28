@@ -12,6 +12,7 @@ dependencies = [
   "opencv-python>=4.9,<5",
   "onnxruntime>=1.18",
   "pillow>=10",
+  "rich>=13.7",
   "rtmlib>=0.0.13",
   "sounddevice>=0.4.6",
   "soundfile>=0.12",
