@@ -24,6 +24,11 @@ final class AppModel: ObservableObject {
 
     private var backendProcess: BackendProcess?
     private var backendClient: BackendClient?
+    private lazy var cameraInstaller = CameraExtensionInstaller { [weak self] status in
+        Task { @MainActor in
+            self?.cameraStatus = status
+        }
+    }
     private var didStartBackend = false
     private var latestPreviewSequence = 0
 
@@ -190,6 +195,10 @@ final class AppModel: ObservableObject {
         } catch {
             activityStatus = "Could not set audio delay: \(error.localizedDescription)"
         }
+    }
+
+    func installCameraExtension() {
+        cameraInstaller.activate()
     }
 
     func stopAppServiceForExit() {

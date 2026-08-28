@@ -4,7 +4,7 @@
 
 - Feature specs live in `specs/`; implementation tickets live in `tickets/`.
 - Treat each spec as a feature track. Work one ticket at a time.
-- Current ticket: `tickets/005-camera-extension-static-frame.md`.
+- Current ticket: `tickets/006-camera-extension-frame-feed.md`.
 - Keep the existing CLI/OBS/BlackHole MVP working while building the native macOS app track.
 
 ## Engineering style

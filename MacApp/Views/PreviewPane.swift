@@ -60,6 +60,9 @@ struct PreviewPane: View {
                         Task { await model.setAudioDelay(ms: value) }
                     }
                 Spacer()
+                Button("Install Camera") {
+                    model.installCameraExtension()
+                }
                 Button("Refresh") {
                     Task { try? await model.refreshBackendData() }
                 }
