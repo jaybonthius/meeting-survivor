@@ -1,6 +1,6 @@
 # Ticket 002: SwiftUI dev app IPC shell
 
-Status: `active`
+Status: `implemented`
 
 Spec: [`specs/002-native-macos-app.md`](../specs/002-native-macos-app.md)
 

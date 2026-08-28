@@ -5,10 +5,11 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button("Add Video") {
-                // Ticket 002 wires this to NSOpenPanel and prepareAvatar IPC.
+            Button(model.isPreparingAvatar ? "Preparing..." : "Add Video") {
+                model.chooseVideoAndPrepare()
             }
             .buttonStyle(.borderedProminent)
+            .disabled(model.isPreparingAvatar)
 
             if model.avatars.isEmpty {
                 ContentUnavailableView("No Avatars", systemImage: "person.crop.rectangle", description: Text("Add a source video to prepare an avatar."))

@@ -11,5 +11,11 @@ struct RootView: View {
             PreviewPane()
         }
         .frame(minWidth: 900, minHeight: 600)
+        .task {
+            await model.startBackendIfNeeded()
+        }
+        .onDisappear {
+            model.stopBackend()
+        }
     }
 }

@@ -23,15 +23,35 @@ struct PreviewPane: View {
                 StatusRow(label: "Backend", value: model.backendStatus)
                 StatusRow(label: "Camera", value: model.cameraStatus)
                 StatusRow(label: "Audio", value: model.audioStatus)
-                StatusRow(label: "Input", value: model.selectedInputDevice)
-                StatusRow(label: "Output", value: model.selectedOutputDevice)
+                StatusRow(label: "Devices", value: "\(model.audioDevices.count)")
+                StatusRow(label: "Avatars", value: "\(model.avatars.count)")
+                StatusRow(label: "Last event", value: model.lastBackendEvent)
             }
 
             HStack {
+                Picker("Input", selection: $model.selectedInputDevice) {
+                    Text("None").tag("None")
+                    ForEach(model.audioDevices.filter(\.isInput)) { device in
+                        Text(device.name).tag(device.name)
+                    }
+                }
+                Picker("Output", selection: $model.selectedOutputDevice) {
+                    Text("None").tag("None")
+                    ForEach(model.audioDevices.filter(\.isOutput)) { device in
+                        Text(device.name).tag(device.name)
+                    }
+                }
+            }
+
+            HStack {
+                Button("Refresh") {
+                    Task { try? await model.refreshBackendData() }
+                }
                 Button("Start Session") {}
                     .disabled(true)
-                Button("Stop") {}
-                    .disabled(true)
+                Button("Stop Backend") {
+                    model.stopBackend()
+                }
             }
         }
         .padding()

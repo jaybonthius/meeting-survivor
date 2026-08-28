@@ -12,6 +12,10 @@
 		A10000000000000000000003 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000013 /* RootView.swift */; };
 		A10000000000000000000004 /* SidebarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000014 /* SidebarView.swift */; };
 		A10000000000000000000005 /* PreviewPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000015 /* PreviewPane.swift */; };
+		A10000000000000000000006 /* BackendProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000016 /* BackendProtocol.swift */; };
+		A10000000000000000000007 /* BackendClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000017 /* BackendClient.swift */; };
+		A10000000000000000000008 /* BackendProcess.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000018 /* BackendProcess.swift */; };
+		A10000000000000000000009 /* AppStoragePaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000019 /* AppStoragePaths.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -21,6 +25,10 @@
 		A10000000000000000000013 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		A10000000000000000000014 /* SidebarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarView.swift; sourceTree = "<group>"; };
 		A10000000000000000000015 /* PreviewPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreviewPane.swift; sourceTree = "<group>"; };
+		A10000000000000000000016 /* BackendProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendProtocol.swift; sourceTree = "<group>"; };
+		A10000000000000000000017 /* BackendClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendClient.swift; sourceTree = "<group>"; };
+		A10000000000000000000018 /* BackendProcess.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackendProcess.swift; sourceTree = "<group>"; };
+		A10000000000000000000019 /* AppStoragePaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppStoragePaths.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -29,9 +37,10 @@
 
 /* Begin PBXGroup section */
 		A10000000000000000000030 = {isa = PBXGroup; children = (A10000000000000000000031 /* MacApp */, A10000000000000000000032 /* Products */); sourceTree = "<group>"; };
-		A10000000000000000000031 /* MacApp */ = {isa = PBXGroup; children = (A10000000000000000000011 /* MeetingSurvivorApp.swift */, A10000000000000000000012 /* AppModel.swift */, A10000000000000000000033 /* Views */); path = MacApp; sourceTree = "<group>"; };
+		A10000000000000000000031 /* MacApp */ = {isa = PBXGroup; children = (A10000000000000000000011 /* MeetingSurvivorApp.swift */, A10000000000000000000012 /* AppModel.swift */, A10000000000000000000033 /* Views */, A10000000000000000000034 /* Services */); path = MacApp; sourceTree = "<group>"; };
 		A10000000000000000000032 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000010 /* MeetingSurvivor.app */); name = Products; sourceTree = "<group>"; };
 		A10000000000000000000033 /* Views */ = {isa = PBXGroup; children = (A10000000000000000000013 /* RootView.swift */, A10000000000000000000014 /* SidebarView.swift */, A10000000000000000000015 /* PreviewPane.swift */); path = Views; sourceTree = "<group>"; };
+		A10000000000000000000034 /* Services */ = {isa = PBXGroup; children = (A10000000000000000000016 /* BackendProtocol.swift */, A10000000000000000000017 /* BackendClient.swift */, A10000000000000000000018 /* BackendProcess.swift */, A10000000000000000000019 /* AppStoragePaths.swift */); path = Services; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -47,7 +56,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A10000000000000000000050 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* MeetingSurvivorApp.swift in Sources */, A10000000000000000000002 /* AppModel.swift in Sources */, A10000000000000000000003 /* RootView.swift in Sources */, A10000000000000000000004 /* SidebarView.swift in Sources */, A10000000000000000000005 /* PreviewPane.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000050 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000001 /* MeetingSurvivorApp.swift in Sources */, A10000000000000000000002 /* AppModel.swift in Sources */, A10000000000000000000003 /* RootView.swift in Sources */, A10000000000000000000004 /* SidebarView.swift in Sources */, A10000000000000000000005 /* PreviewPane.swift in Sources */, A10000000000000000000006 /* BackendProtocol.swift in Sources */, A10000000000000000000007 /* BackendClient.swift in Sources */, A10000000000000000000008 /* BackendProcess.swift in Sources */, A10000000000000000000009 /* AppStoragePaths.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
