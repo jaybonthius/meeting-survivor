@@ -38,7 +38,7 @@ class BackendServer:
             "outputDeviceId": None,
             "virtualCamera": False,
             "virtualMicrophone": False,
-            "precision": "q8",
+            "precision": "fp16",
             "generatedFps": 12.5,
             "audioDelayMs": 400,
             "startedAt": None,

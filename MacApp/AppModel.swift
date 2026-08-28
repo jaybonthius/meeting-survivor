@@ -319,7 +319,7 @@ final class AppModel: ObservableObject {
             outputDeviceId: event.outputDeviceId,
             virtualCamera: event.virtualCamera ?? false,
             virtualMicrophone: event.virtualMicrophone ?? false,
-            precision: event.precision ?? "q8",
+            precision: event.precision ?? "fp16",
             generatedFps: event.generatedFps ?? 12.5,
             audioDelayMs: event.audioDelayMs ?? audioDelayMs,
             startedAt: event.startedAt
@@ -353,7 +353,7 @@ private extension SessionStateResult {
         outputDeviceId: nil,
         virtualCamera: false,
         virtualMicrophone: false,
-        precision: "q8",
+        precision: "fp16",
         generatedFps: 12.5,
         audioDelayMs: 400,
         startedAt: nil

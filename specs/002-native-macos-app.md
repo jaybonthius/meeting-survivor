@@ -41,7 +41,7 @@ Controls:
 
 - Input device picker: physical microphone, e.g. AirPods Pro or MacBook microphone.
 - Output/meeting microphone picker: the app's virtual microphone once implemented.
-- Precision picker: q8 default, fp16 quality comparison, q4 hidden unless explicitly enabled later.
+- Precision picker: fp16 default for quality, q8 selectable for speed comparison, q4 hidden unless explicitly enabled later.
 - Generated frame rate picker: 12.5 or 25, default chosen by measured throughput.
 - Audio delay slider/input, default 400ms.
 - Optional advanced avatar tuning: bbox shift, extra margin, parsing mode, cheek widths. Hide behind an “Advanced” disclosure.
@@ -109,7 +109,7 @@ Example requests:
 {"id":"2","method":"listAudioDevices"}
 {"id":"3","method":"listAvatars"}
 {"id":"4","method":"prepareAvatar","params":{"videoPath":"/Users/me/video.mov","avatarName":"walking","bboxShift":0,"extraMargin":10}}
-{"id":"5","method":"startSession","params":{"avatarId":"walking","inputDeviceId":"6","virtualCamera":true,"virtualMicrophone":true,"precision":"q8","generatedFps":12.5,"delayMs":400}}
+{"id":"5","method":"startSession","params":{"avatarId":"walking","inputDeviceId":"6","virtualCamera":true,"virtualMicrophone":true,"precision":"fp16","generatedFps":12.5,"delayMs":400}}
 {"id":"6","method":"stopSession"}
 ```
 
@@ -366,6 +366,7 @@ Phase 2: native app preview/control
 - Add video picker.
 - Add prepare progress UI.
 - Add start/stop session UI.
+- Add session quality controls for precision and generated frame rate.
 - Preview works inside app.
 
 Phase 3: virtual camera

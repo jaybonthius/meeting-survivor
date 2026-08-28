@@ -241,6 +241,7 @@ class BackendIPCTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["id"], "state")
         self.assertEqual(response["result"]["state"], "stopped")
         self.assertIsNone(response["result"]["activeAvatarId"])
+        self.assertEqual(response["result"]["precision"], "fp16")
         self.assertEqual(response["result"]["audioDelayMs"], 400)
 
     async def test_start_stop_session_and_setters_emit_session_events(self) -> None:

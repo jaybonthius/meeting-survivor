@@ -102,7 +102,7 @@ final class BackendClient: @unchecked Sendable {
     }
 
     func prepareAvatar(videoPath: String) async throws -> PrepareAvatarResult {
-        let result = try await request(method: "prepareAvatar", params: ["videoPath": .string(videoPath)])
+        let result = try await request(method: "prepareAvatar", params: ["videoPath": .string(videoPath), "precision": .string("fp16")])
         return try decode(PrepareAvatarResult.self, from: result, method: "prepareAvatar")
     }
 
@@ -116,7 +116,7 @@ final class BackendClient: @unchecked Sendable {
             "avatarId": .string(avatarId),
             "audioDelayMs": .int(audioDelayMs),
             "generatedFps": .number(12.5),
-            "precision": .string("q8"),
+            "precision": .string("fp16"),
             "virtualCamera": .bool(virtualCamera),
             "virtualMicrophone": .bool(false),
         ]
