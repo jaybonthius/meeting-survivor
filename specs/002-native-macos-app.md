@@ -1,6 +1,8 @@
-# Meeting Survivor macOS App Spec
+# Feature 2: Native macOS App
 
-Status: `draft`
+Status: `active-planning`
+
+This feature continues from Feature 1 by keeping the proven Python/MuseTalk/MLX backend and replacing the manual OBS/BlackHole workflow with a native macOS app, structured backend IPC, a first-party virtual camera, and a first-party virtual microphone.
 
 ## Goal
 

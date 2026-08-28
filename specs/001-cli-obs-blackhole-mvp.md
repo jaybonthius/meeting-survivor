@@ -1,6 +1,8 @@
-# Build a local talking-head camera for Teams
+# Feature 1: CLI/OBS/BlackHole MVP
 
-Status: `ready-for-agent`
+Status: `implemented-mvp`
+
+This feature captures the first working implementation track: a Python CLI that uses OBS Virtual Camera and BlackHole for manual Teams integration. It remains the baseline and regression target while Feature 2 moves toward a native macOS app.
 
 ## Problem Statement
 
