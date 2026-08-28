@@ -32,6 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
     prep.add_argument("--download-model", action="store_true", help="download MLX weights if missing")
     prep.add_argument("--skip-latents", action="store_true", help="extract frames only; run computes latents lazily")
     prep.add_argument("--max-seconds", type=float, default=10.0, help="cap source clip length; default 10")
+    prep.add_argument("--bbox-shift", type=int, default=0, help="MuseTalk crop tuning: positive usually increases mouth motion")
+    prep.add_argument("--extra-margin", type=int, default=10, help="pixels added below v1.5 crop; use 0-40")
+    prep.add_argument("--parsing-mode", choices=["jaw", "raw", "neck"], default="jaw")
+    prep.add_argument("--left-cheek-width", type=int, default=90)
+    prep.add_argument("--right-cheek-width", type=int, default=90)
 
     run = sub.add_parser("run", help="run live preview and delayed mic audio")
     run.add_argument("--avatar-dir", type=Path, required=True)
@@ -69,6 +74,11 @@ def main(argv: list[str] | None = None) -> None:
                 download_model=args.download_model,
                 skip_latents=args.skip_latents,
                 max_seconds=args.max_seconds,
+                bbox_shift=args.bbox_shift,
+                extra_margin=args.extra_margin,
+                parsing_mode=args.parsing_mode,
+                left_cheek_width=args.left_cheek_width,
+                right_cheek_width=args.right_cheek_width,
             )
             print(avatar)
             return

@@ -37,7 +37,7 @@ def _extract_frames(video_path: Path, frames_dir: Path, limit: int) -> tuple[lis
     return frames, rel_paths
 
 
-def _landmarks_and_boxes(frames: list[np.ndarray]) -> list[list[int]]:
+def _landmarks_and_boxes(frames: list[np.ndarray], bbox_shift: int) -> list[list[int]]:
     import_upstream_utils(allow_download=False)
     from face_detection import FaceAlignment, LandmarksType
     from rtmlib import Wholebody
@@ -63,6 +63,7 @@ def _landmarks_and_boxes(frames: list[np.ndarray]) -> list[list[int]]:
             continue
         face_landmark = kpts[0][23:91].astype(np.int32)
         half_face_coord = face_landmark[29].copy()
+        half_face_coord[1] = half_face_coord[1] + bbox_shift
         half_face_dist = np.max(face_landmark[:, 1]) - half_face_coord[1]
         upper_bond = max(0, half_face_coord[1] - half_face_dist)
         x1, y1, x2, y2 = (
@@ -116,6 +117,11 @@ def prepare_avatar(
     download_model: bool,
     skip_latents: bool,
     max_seconds: float | None,
+    bbox_shift: int = 0,
+    extra_margin: int = 10,
+    parsing_mode: str = "jaw",
+    left_cheek_width: int = 90,
+    right_cheek_width: int = 90,
 ) -> Path:
     video_path = video_path.expanduser().resolve()
     if not video_path.exists():
@@ -151,8 +157,7 @@ def prepare_avatar(
         raise RuntimeError("No frames extracted")
     logging.info("extracted %s avatar frames", len(frames))
 
-    boxes = _landmarks_and_boxes(frames)
-    extra_margin = 10
+    boxes = _landmarks_and_boxes(frames, bbox_shift=bbox_shift)
     for i, (box, frame) in enumerate(zip(boxes, frames)):
         if not _valid_box(box):
             continue
@@ -176,13 +181,13 @@ def prepare_avatar(
         from musetalk.utils.blending import get_image_prepare_material
         from musetalk.utils.face_parsing import FaceParsing
 
-        fp = FaceParsing(left_cheek_width=90, right_cheek_width=90)
+        fp = FaceParsing(left_cheek_width=left_cheek_width, right_cheek_width=right_cheek_width)
         for idx, (frame, box) in enumerate(zip(frames, boxes)):
             if not _valid_box(box):
                 masks.append(None)
                 mask_boxes.append(None)
                 continue
-            mask, crop_box = get_image_prepare_material(frame, box, fp=fp, mode="jaw")
+            mask, crop_box = get_image_prepare_material(frame, box, fp=fp, mode=parsing_mode)
             name = f"mask_{idx:06d}.png"
             cv2.imwrite(str(masks_dir / name), mask)
             masks.append(mask)
@@ -202,8 +207,12 @@ def prepare_avatar(
         "frames": frame_paths,
         "boxes": boxes,
         "mask_boxes": mask_boxes,
+        "bbox_shift": bbox_shift,
         "extra_margin": extra_margin,
-        "prep": "upstream MuseTalk S3FD/DWPose coords plus BiSeNet jaw masks",
+        "parsing_mode": parsing_mode,
+        "left_cheek_width": left_cheek_width,
+        "right_cheek_width": right_cheek_width,
+        "prep": "upstream MuseTalk S3FD/DWPose coords plus BiSeNet masks",
     }
     (avatar_dir / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
 

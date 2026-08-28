@@ -37,7 +37,7 @@ First run downloads q8 MuseTalk MLX weights into `models/` unless you pass your 
 uv run meeting-survivor prepare path/to/source.mp4 --download-model --avatar-dir avatars/me
 ```
 
-After this, the avatar and model weights should be reusable offline.
+After this, the avatar and model weights should be reusable offline. If mouth motion is too weak, prepare a variant with `--bbox-shift 10` or `--bbox-shift 20`; if the jaw/chin is clipped, adjust `--extra-margin` between 0 and 40.
 
 ## List audio devices
 

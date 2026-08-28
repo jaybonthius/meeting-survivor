@@ -59,7 +59,7 @@ class SpeechGate:
         return self.speaking
 
 
-def _audio_chunk_from_pcm16k(pipe, pcm16: np.ndarray, fps: int = 25):
+def _audio_chunk_from_pcm16k(pipe, pcm16: np.ndarray, fps: int = 25, frames_from_end: int = 0):
     from musetalk_mlx.whisper.audio2feature import get_whisper_chunk
     from musetalk_mlx.whisper.log_mel import log_mel_spectrogram
 
@@ -68,7 +68,8 @@ def _audio_chunk_from_pcm16k(pipe, pcm16: np.ndarray, fps: int = 25):
     mel = log_mel_spectrogram(mx.array(pcm16.astype(np.float32)))
     stacked = pipe.whisper_encoder(mel)
     chunks = get_whisper_chunk(stacked, len(pcm16), fps=fps)
-    return chunks[-1:]
+    idx = max(0, chunks.shape[0] - 1 - frames_from_end)
+    return chunks[idx:idx + 1]
 
 
 def _rms(samples: np.ndarray) -> float:
@@ -99,17 +100,23 @@ def run_camera(opts: RunOptions) -> dict:
     stats = {"displayed": 0, "generated": 0, "missed": 0, "dropped_jobs": 0, "max_queue": 0}
 
     def worker():
+        mx.set_default_device(mx.gpu)
+        mx.set_default_stream(mx.new_stream(mx.gpu))
         while not stop.is_set():
             try:
                 job = jobs.get(timeout=0.1)
             except queue.Empty:
                 continue
-            frame_idx, audio16 = job
+            frame_idx, audio_payload, preencoded = job
             started = time.monotonic()
             try:
                 dtype = getattr(pipe, "_dtype", mx.float32)
                 latent = _load_or_make_latent(pipe, latents, crops, frame_idx).astype(dtype)
-                chunk = _audio_chunk_from_pcm16k(pipe, audio16).astype(dtype)
+                if preencoded:
+                    chunk = mx.array(audio_payload).astype(dtype)
+                else:
+                    frames_from_end = max(0, int(round(opts.delay_ms / 1000.0 * 25)))
+                    chunk = _audio_chunk_from_pcm16k(pipe, audio_payload, frames_from_end=frames_from_end).astype(dtype)
                 face = pipe.generate_faces(latent, chunk)[0]
                 rendered = composite_face(
                     frames[frame_idx],
@@ -133,8 +140,11 @@ def run_camera(opts: RunOptions) -> dict:
     audio = None
     wav16 = None
     wav_rate = 16000
+    wav_chunks = None
     if opts.wav_input:
         wav16, wav_rate = read_wav_16k(opts.wav_input)
+        wav_chunks = np.array(pipe.encode_audio_from_wav(opts.wav_input, fps=25))
+        logging.info("precomputed %s official MuseTalk audio chunks", wav_chunks.shape[0])
         if opts.output_wav:
             write_delayed_wav(opts.wav_input, opts.output_wav, opts.delay_ms)
     else:
@@ -201,7 +211,11 @@ def run_camera(opts: RunOptions) -> dict:
             should_generate = speaking and (stats["displayed"] % generation_stride == 0)
             if should_generate:
                 try:
-                    jobs.put_nowait((source_idx, audio16.copy()))
+                    if wav_chunks is not None:
+                        chunk_idx = min(stats["displayed"], wav_chunks.shape[0] - 1)
+                        jobs.put_nowait((source_idx, wav_chunks[chunk_idx:chunk_idx + 1], True))
+                    else:
+                        jobs.put_nowait((source_idx, audio16.copy(), False))
                 except queue.Full:
                     stats["dropped_jobs"] += 1
 
