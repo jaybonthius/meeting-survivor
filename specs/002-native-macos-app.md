@@ -40,10 +40,11 @@ Main area:
 Controls:
 
 - Input device picker: physical microphone, e.g. AirPods Pro or MacBook microphone.
-- Output/meeting microphone picker: the app's virtual microphone once implemented.
+- Output picker: BlackHole-style delayed mic output now; the app's virtual microphone once implemented.
 - Precision picker: fp16 default for quality, q8 selectable for speed comparison, q4 hidden unless explicitly enabled later.
 - Generated frame rate picker: 12.5 or 25, default chosen by measured throughput.
-- Audio delay slider/input, default 400ms.
+- Audio delay slider/input, default 400ms; updates must not restart a running stream.
+- Speech threshold and audio-window controls for live VAD/lip-sync tuning; updates must not restart a running stream.
 - Optional advanced avatar tuning: bbox shift, extra margin, parsing mode, cheek widths. Hide behind an “Advanced” disclosure.
 
 ## Architecture
@@ -109,7 +110,7 @@ Example requests:
 {"id":"2","method":"listAudioDevices"}
 {"id":"3","method":"listAvatars"}
 {"id":"4","method":"prepareAvatar","params":{"videoPath":"/Users/me/video.mov","avatarName":"walking","bboxShift":0,"extraMargin":10}}
-{"id":"5","method":"startSession","params":{"avatarId":"walking","inputDeviceId":"6","virtualCamera":true,"virtualMicrophone":true,"precision":"fp16","generatedFps":12.5,"delayMs":400}}
+{"id":"5","method":"startSession","params":{"avatarId":"walking","inputDeviceId":"6","virtualCamera":true,"virtualMicrophone":true,"precision":"fp16","generatedFps":12.5,"audioDelayMs":400,"vadThreshold":0.012,"audioWindowSeconds":1.2}}
 {"id":"6","method":"stopSession"}
 ```
 
@@ -245,6 +246,7 @@ Required event types:
 - `prepareFailed`
 - `sessionState`
 - `sessionStats`
+- `sessionControl`
 - `deviceChanged`
 - `error`
 
@@ -254,8 +256,9 @@ Initial behavior:
 
 - Only prepared avatars can be selected.
 - Switching avatars during a session is allowed if the target avatar cache is ready.
-- First implementation may briefly fade/freeze for one frame while swapping caches.
-- Backend must not reload model weights on every avatar switch.
+- While a switch is loading, the stream keeps serving the current avatar frames.
+- The backend swaps to the requested avatar only after the target avatar/model assets are fully loaded.
+- Backend must not restart the session runtime for avatar switches, audio delay changes, VAD tuning, or generated FPS changes.
 
 Non-goal for first app version:
 

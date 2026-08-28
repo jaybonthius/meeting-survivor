@@ -10,6 +10,29 @@ This is intentionally a simple MVP, not a polished camera driver or app.
 - `meeting-survivor prepare` extracts avatar frames, runs MuseTalk's S3FD/DWPose prep, caches BiSeNet jaw masks, and caches MuseTalk latents.
 - `meeting-survivor run` opens a fixed preview window, captures the mic, writes delayed mic audio to BlackHole, and swaps in generated lower-face crops while speech is detected.
 - `scripts/acceptance.py` runs the same loop from a prerecorded WAV and records the preview plus delayed audio.
+- `MeetingSurvivor.xcodeproj` builds a native SwiftUI control app that launches the Python backend, previews generated frames, and can feed the local CoreMediaIO camera-extension transport when signing allows it.
+
+## Native macOS app dev build
+
+Build and run the unsigned development app from the repo root:
+
+```bash
+uv sync
+xcodebuild -project MeetingSurvivor.xcodeproj \
+  -scheme MeetingSurvivor \
+  -configuration Debug \
+  -derivedDataPath .build/DerivedData \
+  build CODE_SIGNING_ALLOWED=NO
+open .build/DerivedData/Build/Products/Debug/MeetingSurvivor.app
+```
+
+The native app defaults to `fp16`, target generated FPS `12.5`, `400ms` delay, speech threshold `0.012`, and a `1.2s` audio window. Live tuning controls update delay, target generated FPS, VAD threshold, and audio window without restarting the session.
+
+Changing precision or selecting another prepared avatar while running is staged: the backend keeps streaming the current avatar, loads the requested avatar/model in the background, then swaps only after the new assets are ready. The sidebar shows a spinner for the pending avatar and the preview/camera feed keeps repeating current frames until the swap completes.
+
+The app can optionally send delayed mic audio to the selected output device for BlackHole-style demos; choose `BlackHole 2ch`, enable **Send delayed mic to output**, then start the session. This toggle is start-time only for now. The first-party virtual microphone remains future driver/plugin work.
+
+Useful app diagnostics are written to `~/Library/Application Support/Meeting Survivor/logs/backend.log`. The unsigned dev build can preview locally; real camera selection in Zoom/Teams still requires Apple signing/provisioning and system-extension approval.
 
 ## Manual setup
 
@@ -99,7 +122,7 @@ Outputs go to `outputs/acceptance/`.
 
 - MuseTalk MLX source: `https://github.com/xocialize/musetalk-mlx`
 - Revision: `c6eb30ebd1ed4d043983209813370153de9346bf`
-- Default model: `mlx-community/MuseTalk-1.5-q8`
+- CLI default model: `mlx-community/MuseTalk-1.5-q8`; native app default: `mlx-community/MuseTalk-1.5-fp16`
 
 ## Known MVP shortcuts
 

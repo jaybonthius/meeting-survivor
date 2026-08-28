@@ -101,8 +101,17 @@ final class BackendClient: @unchecked Sendable {
         return try decode(AvatarsResult.self, from: result, method: "listAvatars").avatars
     }
 
-    func prepareAvatar(videoPath: String) async throws -> PrepareAvatarResult {
-        let result = try await request(method: "prepareAvatar", params: ["videoPath": .string(videoPath), "precision": .string("fp16")])
+    func prepareAvatar(videoPath: String, precision: String, maxSeconds: Double, bboxShift: Int, extraMargin: Int) async throws -> PrepareAvatarResult {
+        let result = try await request(
+            method: "prepareAvatar",
+            params: [
+                "videoPath": .string(videoPath),
+                "precision": .string(precision),
+                "maxSeconds": .number(maxSeconds),
+                "bboxShift": .int(bboxShift),
+                "extraMargin": .int(extraMargin),
+            ]
+        )
         return try decode(PrepareAvatarResult.self, from: result, method: "prepareAvatar")
     }
 
@@ -111,14 +120,27 @@ final class BackendClient: @unchecked Sendable {
         return try decode(SessionStateResult.self, from: result, method: "getSessionState")
     }
 
-    func startSession(avatarId: String, inputDeviceId: String?, outputDeviceId: String?, audioDelayMs: Int, virtualCamera: Bool) async throws -> SessionStateResult {
+    func startSession(
+        avatarId: String,
+        inputDeviceId: String?,
+        outputDeviceId: String?,
+        audioDelayMs: Int,
+        precision: String,
+        generatedFps: Double,
+        vadThreshold: Double,
+        audioWindowSeconds: Double,
+        virtualCamera: Bool,
+        virtualMicrophone: Bool
+    ) async throws -> SessionStateResult {
         var params: [String: JSONValue] = [
             "avatarId": .string(avatarId),
             "audioDelayMs": .int(audioDelayMs),
-            "generatedFps": .number(12.5),
-            "precision": .string("fp16"),
+            "generatedFps": .number(generatedFps),
+            "precision": .string(precision),
+            "vadThreshold": .number(vadThreshold),
+            "audioWindowSeconds": .number(audioWindowSeconds),
             "virtualCamera": .bool(virtualCamera),
-            "virtualMicrophone": .bool(false),
+            "virtualMicrophone": .bool(virtualMicrophone),
         ]
         if let inputDeviceId, !inputDeviceId.isEmpty {
             params["inputDeviceId"] = .string(inputDeviceId)
@@ -128,6 +150,20 @@ final class BackendClient: @unchecked Sendable {
         }
         let result = try await request(method: "startSession", params: params)
         return try decode(SessionStateResult.self, from: result, method: "startSession")
+    }
+
+    func setSessionConfig(precision: String, generatedFps: Double, audioDelayMs: Int, vadThreshold: Double, audioWindowSeconds: Double) async throws -> SessionStateResult {
+        let result = try await request(
+            method: "setSessionConfig",
+            params: [
+                "precision": .string(precision),
+                "generatedFps": .number(generatedFps),
+                "audioDelayMs": .int(audioDelayMs),
+                "vadThreshold": .number(vadThreshold),
+                "audioWindowSeconds": .number(audioWindowSeconds),
+            ]
+        )
+        return try decode(SessionStateResult.self, from: result, method: "setSessionConfig")
     }
 
     func stopSession() async throws -> SessionStateResult {

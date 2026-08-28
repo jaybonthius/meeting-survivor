@@ -1,7 +1,7 @@
 # Ticket 008: Session quality controls
 
-Status: `placeholder`
+Status: `implemented`
 
 Spec: [`specs/002-native-macos-app.md`](../specs/002-native-macos-app.md)
 
-Placeholder: add SwiftUI controls for session precision (`fp16` default, `q8` speed mode) and generated frame rate (`12.5`/`25`), persist selections, and send them through `prepareAvatar`/`startSession` IPC.
+Implemented: add SwiftUI controls for precision (`fp16` default, `q8` speed mode), target generated frame rate (`12.5`/`25`), audio delay, speech threshold, audio window, delayed audio output toggle, and basic avatar-prep tuning (`bboxShift`, `extraMargin`, clip length). Persist selections locally and send them through `prepareAvatar`, `startSession`, and `setSessionConfig` IPC.

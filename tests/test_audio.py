@@ -3,8 +3,24 @@ from __future__ import annotations
 import unittest
 from unittest import mock
 
+import numpy as np
+
 from meeting_survivor import audio as audio_module
-from meeting_survivor.audio import LiveAudio, sounddevice_device_identifier
+from meeting_survivor.audio import DelayLine, LiveAudio, sounddevice_device_identifier
+
+
+class DelayLineTests(unittest.TestCase):
+    def test_delay_can_be_retuned_without_recreating_audio_streams(self) -> None:
+        delay = DelayLine(delay_seconds=0.1, sample_rate=10, max_extra_seconds=1.0)
+        delay.push(np.array([0.2, 0.3, 0.4], dtype=np.float32))
+        np.testing.assert_array_equal(delay.pop(2), np.array([0.0, 0.2], dtype=np.float32))
+
+        delay.set_delay_seconds(0.3)
+        np.testing.assert_array_equal(delay.pop(3), np.array([0.0, 0.3, 0.4], dtype=np.float32))
+
+        delay.push(np.array([0.5, 0.6], dtype=np.float32))
+        delay.set_delay_seconds(0.0)
+        np.testing.assert_array_equal(delay.pop(1), np.array([0.0], dtype=np.float32))
 
 
 class SoundDeviceIdentifierTests(unittest.TestCase):

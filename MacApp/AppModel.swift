@@ -11,13 +11,44 @@ final class AppModel: ObservableObject {
     @Published var sessionStatus = "Stopped"
     @Published var selectedInputDeviceID = ""
     @Published var selectedOutputDeviceID = ""
-    @Published var audioDelayMs = 400
+    @Published var audioDelayMs = AppModel.storedInt("audioDelayMs", defaultValue: 400) {
+        didSet { UserDefaults.standard.set(audioDelayMs, forKey: "audioDelayMs") }
+    }
+    @Published var selectedPrecision = UserDefaults.standard.string(forKey: "selectedPrecision") ?? "fp16" {
+        didSet { UserDefaults.standard.set(selectedPrecision, forKey: "selectedPrecision") }
+    }
+    @Published var targetGeneratedFps = AppModel.storedDouble("targetGeneratedFps", defaultValue: 12.5) {
+        didSet { UserDefaults.standard.set(targetGeneratedFps, forKey: "targetGeneratedFps") }
+    }
+    @Published var vadThreshold = AppModel.storedDouble("vadThreshold", defaultValue: 0.012) {
+        didSet { UserDefaults.standard.set(vadThreshold, forKey: "vadThreshold") }
+    }
+    @Published var audioWindowSeconds = AppModel.storedDouble("audioWindowSeconds", defaultValue: 1.2) {
+        didSet { UserDefaults.standard.set(audioWindowSeconds, forKey: "audioWindowSeconds") }
+    }
+    @Published var sendDelayedAudioToOutput = AppModel.storedBool("sendDelayedAudioToOutput", defaultValue: false) {
+        didSet { UserDefaults.standard.set(sendDelayedAudioToOutput, forKey: "sendDelayedAudioToOutput") }
+    }
+    @Published var prepareBboxShift = AppModel.storedInt("prepareBboxShift", defaultValue: 15) {
+        didSet { UserDefaults.standard.set(prepareBboxShift, forKey: "prepareBboxShift") }
+    }
+    @Published var prepareExtraMargin = AppModel.storedInt("prepareExtraMargin", defaultValue: 10) {
+        didSet { UserDefaults.standard.set(prepareExtraMargin, forKey: "prepareExtraMargin") }
+    }
+    @Published var prepareMaxSeconds = AppModel.storedDouble("prepareMaxSeconds", defaultValue: 10.0) {
+        didSet { UserDefaults.standard.set(prepareMaxSeconds, forKey: "prepareMaxSeconds") }
+    }
     @Published var audioDevices: [AudioDeviceRecord] = []
     @Published var avatars: [AvatarRecord] = []
     @Published var selectedAvatarID: String?
     @Published var activityStatus = "No activity yet"
     @Published var isPreparingAvatar = false
     @Published var isSessionActionInFlight = false
+    @Published var isAvatarSwitchInFlight = false
+    @Published var isApplyingSessionConfig = false
+    @Published var pendingAvatarID: String?
+    @Published var pendingPrecision: String?
+    @Published var sessionControlStatus = "Ready"
     @Published var sessionState = SessionStateResult.stopped
     @Published var sessionStats: SessionStatsResult?
     @Published var previewImage: NSImage?
@@ -33,6 +64,21 @@ final class AppModel: ObservableObject {
     private var cameraFrameFeedAvailable = false
     private var latestPreviewSequence = 0
 
+    private static func storedInt(_ key: String, defaultValue: Int) -> Int {
+        guard UserDefaults.standard.object(forKey: key) != nil else { return defaultValue }
+        return UserDefaults.standard.integer(forKey: key)
+    }
+
+    private static func storedDouble(_ key: String, defaultValue: Double) -> Double {
+        guard UserDefaults.standard.object(forKey: key) != nil else { return defaultValue }
+        return UserDefaults.standard.double(forKey: key)
+    }
+
+    private static func storedBool(_ key: String, defaultValue: Bool) -> Bool {
+        guard UserDefaults.standard.object(forKey: key) != nil else { return defaultValue }
+        return UserDefaults.standard.bool(forKey: key)
+    }
+
     var selectedAvatarName: String {
         guard let selectedAvatarID else { return "None" }
         return avatars.first(where: { $0.id == selectedAvatarID })?.name ?? selectedAvatarID
@@ -44,6 +90,20 @@ final class AppModel: ObservableObject {
 
     var selectedOutputDeviceName: String {
         deviceName(for: selectedOutputDeviceID)
+    }
+
+    var pendingAvatarName: String {
+        guard let pendingAvatarID else { return "None" }
+        return avatars.first(where: { $0.id == pendingAvatarID })?.name ?? pendingAvatarID
+    }
+
+    var virtualCameraStatus: String {
+        sessionState.virtualCamera ? "On" : (cameraFrameFeedAvailable ? "Off" : "Unavailable until signed")
+    }
+
+    var virtualMicrophoneStatus: String {
+        if sessionState.virtualMicrophone { return "Sending delayed audio" }
+        return "Off; choose BlackHole before start"
     }
 
     func startBackendIfNeeded() async {
@@ -124,10 +184,20 @@ final class AppModel: ObservableObject {
         activityStatus = "Preparing \(url.lastPathComponent)"
         defer { isPreparingAvatar = false }
         do {
-            let result = try await backendClient.prepareAvatar(videoPath: url.path)
+            let result = try await backendClient.prepareAvatar(
+                videoPath: url.path,
+                precision: selectedPrecision,
+                maxSeconds: prepareMaxSeconds,
+                bboxShift: prepareBboxShift,
+                extraMargin: prepareExtraMargin
+            )
             try await refreshBackendData()
             await selectAvatar(id: result.avatarId)
-            activityStatus = "Prepared \(result.avatarId)"
+            if pendingAvatarID == nil {
+                activityStatus = "Prepared \(result.avatarId)"
+            } else {
+                activityStatus = "Prepared \(result.avatarId); loading without interrupting stream"
+            }
         } catch {
             activityStatus = "Prepare failed: \(error.localizedDescription)"
         }
@@ -141,13 +211,29 @@ final class AppModel: ObservableObject {
 
     func selectAvatar(id: String) async {
         let previousAvatarID = selectedAvatarID
-        selectedAvatarID = id
+        let wasRunning = sessionState.isRunning
+        if !wasRunning {
+            selectedAvatarID = id
+        }
         guard let backendClient else { return }
+        if wasRunning {
+            isAvatarSwitchInFlight = true
+            pendingAvatarID = id
+            sessionControlStatus = "Loading \(avatars.first(where: { $0.id == id })?.name ?? id)"
+        }
         do {
-            applySessionState(try await backendClient.setActiveAvatar(id))
-            activityStatus = "Selected \(avatars.first(where: { $0.id == id })?.name ?? id)"
+            let state = try await backendClient.setActiveAvatar(id)
+            applySessionState(state)
+            if wasRunning, state.pendingAvatarId != nil {
+                activityStatus = "Loading avatar; stream stays on \(selectedAvatarName)"
+            } else {
+                activityStatus = "Selected \(avatars.first(where: { $0.id == id })?.name ?? id)"
+            }
         } catch {
             selectedAvatarID = previousAvatarID
+            pendingAvatarID = nil
+            isAvatarSwitchInFlight = false
+            sessionControlStatus = "Ready"
             activityStatus = "Could not select avatar: \(error.localizedDescription)"
         }
     }
@@ -171,7 +257,12 @@ final class AppModel: ObservableObject {
                 inputDeviceId: selectedInputDeviceID.nilIfEmpty,
                 outputDeviceId: selectedOutputDeviceID.nilIfEmpty,
                 audioDelayMs: audioDelayMs,
-                virtualCamera: cameraFrameFeedAvailable
+                precision: selectedPrecision,
+                generatedFps: targetGeneratedFps,
+                vadThreshold: vadThreshold,
+                audioWindowSeconds: audioWindowSeconds,
+                virtualCamera: cameraFrameFeedAvailable,
+                virtualMicrophone: sendDelayedAudioToOutput && !selectedOutputDeviceID.isEmpty
             )
             applySessionState(state)
             activityStatus = "Session started"
@@ -196,11 +287,34 @@ final class AppModel: ObservableObject {
     }
 
     func setAudioDelay(ms: Int) async {
+        audioDelayMs = ms
+        await applySessionConfigIfRunning(label: "Audio delay")
+    }
+
+    func applySessionConfigIfRunning(label: String = "Settings") async {
         guard let backendClient else { return }
+        guard sessionState.isRunning else {
+            activityStatus = "\(label) saved for next session"
+            return
+        }
+        isApplyingSessionConfig = true
+        defer { isApplyingSessionConfig = false }
         do {
-            applySessionState(try await backendClient.setAudioDelay(ms: ms))
+            let state = try await backendClient.setSessionConfig(
+                precision: selectedPrecision,
+                generatedFps: targetGeneratedFps,
+                audioDelayMs: audioDelayMs,
+                vadThreshold: vadThreshold,
+                audioWindowSeconds: audioWindowSeconds
+            )
+            applySessionState(state)
+            if state.pendingPrecision != nil {
+                activityStatus = "Loading \(selectedPrecision); stream stays live"
+            } else {
+                activityStatus = "\(label) applied"
+            }
         } catch {
-            activityStatus = "Could not set audio delay: \(error.localizedDescription)"
+            activityStatus = "Could not apply \(label.lowercased()): \(error.localizedDescription)"
         }
     }
 
@@ -221,9 +335,16 @@ final class AppModel: ObservableObject {
     private func applySessionState(_ state: SessionStateResult) {
         sessionState = state
         sessionStatus = state.isRunning ? "Running" : "Stopped"
+        pendingAvatarID = state.pendingAvatarId
+        pendingPrecision = state.pendingPrecision
+        sessionControlStatus = state.controlStatus ?? "Ready"
+        isAvatarSwitchInFlight = state.pendingAvatarId != nil
         if !state.isRunning {
             previewImage = nil
             latestPreviewSequence = 0
+            pendingAvatarID = nil
+            pendingPrecision = nil
+            isAvatarSwitchInFlight = false
         }
         if let activeAvatarId = state.activeAvatarId {
             selectedAvatarID = activeAvatarId
@@ -234,7 +355,15 @@ final class AppModel: ObservableObject {
         if let outputDeviceId = state.outputDeviceId {
             selectedOutputDeviceID = outputDeviceId
         }
-        audioDelayMs = state.audioDelayMs
+        if state.isRunning || state.activeAvatarId != nil {
+            if !state.isRunning || state.pendingPrecision == nil {
+                selectedPrecision = state.precision
+            }
+            targetGeneratedFps = state.generatedFps
+            audioDelayMs = state.audioDelayMs
+            vadThreshold = state.vadThreshold
+            audioWindowSeconds = state.audioWindowSeconds
+        }
     }
 
     private func handleBackendEvent(_ event: BackendEvent) {
@@ -255,14 +384,38 @@ final class AppModel: ObservableObject {
         case "sessionState":
             if let state = sessionState(from: event) {
                 applySessionState(state)
+                if let pendingAvatarId = state.pendingAvatarId {
+                    activityStatus = "Loading \(avatars.first(where: { $0.id == pendingAvatarId })?.name ?? pendingAvatarId); stream stays live"
+                } else if let pendingPrecision = state.pendingPrecision {
+                    activityStatus = "Loading \(pendingPrecision); stream stays live"
+                } else {
+                    activityStatus = event.state.map { "Session \($0)" } ?? "Session updated"
+                }
+            } else {
+                activityStatus = event.state.map { "Session \($0)" } ?? "Session updated"
             }
-            activityStatus = event.state.map { "Session \($0)" } ?? "Session updated"
         case "sessionStats":
             if let stats = sessionStats(from: event) {
                 sessionStats = stats
             }
         case "previewFrame":
             loadPreviewFrame(from: event)
+        case "sessionControl":
+            sessionControlStatus = event.message ?? event.status ?? sessionControlStatus
+            if event.status == "applied" {
+                pendingAvatarID = nil
+                pendingPrecision = nil
+                isAvatarSwitchInFlight = false
+                sessionControlStatus = "Ready"
+                activityStatus = event.message ?? "Settings applied"
+            } else if event.status == "failed" {
+                pendingAvatarID = nil
+                pendingPrecision = nil
+                isAvatarSwitchInFlight = false
+                activityStatus = "Update failed: \(event.message ?? "unknown error")"
+            } else if let message = event.message {
+                activityStatus = message
+            }
         case "error":
             activityStatus = "Session failed: \(event.message ?? "unknown backend error")"
         default:
@@ -322,6 +475,11 @@ final class AppModel: ObservableObject {
             precision: event.precision ?? "fp16",
             generatedFps: event.generatedFps ?? 12.5,
             audioDelayMs: event.audioDelayMs ?? audioDelayMs,
+            vadThreshold: event.vadThreshold ?? vadThreshold,
+            audioWindowSeconds: event.audioWindowSeconds ?? audioWindowSeconds,
+            pendingAvatarId: event.pendingAvatarId,
+            pendingPrecision: event.pendingPrecision,
+            controlStatus: event.controlStatus,
             startedAt: event.startedAt
         )
     }
@@ -356,6 +514,11 @@ private extension SessionStateResult {
         precision: "fp16",
         generatedFps: 12.5,
         audioDelayMs: 400,
+        vadThreshold: 0.012,
+        audioWindowSeconds: 1.2,
+        pendingAvatarId: nil,
+        pendingPrecision: nil,
+        controlStatus: "Ready",
         startedAt: nil
     )
 }

@@ -316,6 +316,166 @@ class BackendIPCTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.session.server._session["state"], "stopped")
         self.assertIsNone(self.session.server._preview_sender_task)
 
+    async def test_running_audio_delay_update_does_not_restart_runtime(self) -> None:
+        avatar_dir = self.session.app_support / "avatars" / "me"
+        avatar_dir.mkdir(parents=True)
+        (avatar_dir / "metadata.json").write_text("{}")
+        calls = []
+
+        def fake_run_camera(opts):
+            calls.append(opts)
+            while not opts.stop_event.is_set():
+                time.sleep(0.01)
+            return {"displayed": 0}
+
+        with mock.patch.object(backend_module, "run_camera", side_effect=fake_run_camera):
+            await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "me"}})
+            await _read_until_response(self.reader, "start")
+            for _ in range(100):
+                if calls:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(len(calls), 1)
+            original_stop_event = calls[0].stop_event
+
+            await _send_json(self.writer, {"id": "delay", "method": "setAudioDelay", "params": {"audioDelayMs": 650}})
+            delay_messages = await _read_until_response(self.reader, "delay")
+
+            self.assertEqual(delay_messages[-1]["result"]["state"], "running")
+            self.assertEqual(delay_messages[-1]["result"]["audioDelayMs"], 650)
+            self.assertFalse(original_stop_event.is_set())
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0].control.snapshot().config.delay_ms, 650)
+
+            await _send_json(self.writer, {"id": "stop", "method": "stopSession"})
+            await _read_until_response(self.reader, "stop")
+
+    async def test_running_avatar_switch_is_staged_without_restarting_runtime(self) -> None:
+        for name in ("me", "you"):
+            avatar_dir = self.session.app_support / "avatars" / name
+            avatar_dir.mkdir(parents=True)
+            (avatar_dir / "metadata.json").write_text("{}")
+        calls = []
+
+        def fake_run_camera(opts):
+            calls.append(opts)
+            while not opts.stop_event.is_set():
+                time.sleep(0.01)
+            return {"displayed": 0}
+
+        with mock.patch.object(backend_module, "run_camera", side_effect=fake_run_camera):
+            await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "me"}})
+            await _read_until_response(self.reader, "start")
+            for _ in range(100):
+                if calls:
+                    break
+                await asyncio.sleep(0.01)
+            self.assertEqual(len(calls), 1)
+            original_stop_event = calls[0].stop_event
+
+            await _send_json(self.writer, {"id": "avatar", "method": "setActiveAvatar", "params": {"avatarId": "you"}})
+            avatar_messages = await _read_until_response(self.reader, "avatar")
+
+            self.assertEqual(avatar_messages[-1]["result"]["state"], "running")
+            self.assertEqual(avatar_messages[-1]["result"]["activeAvatarId"], "me")
+            self.assertEqual(avatar_messages[-1]["result"]["pendingAvatarId"], "you")
+            self.assertFalse(original_stop_event.is_set())
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0].control.snapshot().config.avatar_dir.name, "you")
+
+            applied_messages = []
+            while not any(
+                m.get("method") == "event"
+                and m["params"]["type"] == "sessionState"
+                and m["params"].get("activeAvatarId") == "you"
+                for m in applied_messages
+            ):
+                snapshot = calls[0].control.snapshot()
+                calls[0].control_callback(
+                    {
+                        "status": "applied",
+                        "version": snapshot.version,
+                        "avatarId": "you",
+                        "precision": snapshot.config.precision,
+                        "generatedFps": snapshot.config.generated_fps,
+                        "audioDelayMs": snapshot.config.delay_ms,
+                        "vadThreshold": snapshot.config.vad_threshold,
+                        "audioWindowSeconds": snapshot.config.audio_window_seconds,
+                        "message": "Switched to you",
+                    }
+                )
+                applied_messages.append(await _read_json(self.reader))
+            applied_state = next(
+                m for m in applied_messages
+                if m.get("method") == "event" and m["params"]["type"] == "sessionState" and m["params"].get("activeAvatarId") == "you"
+            )
+            self.assertIsNone(applied_state["params"]["pendingAvatarId"])
+
+            await _send_json(self.writer, {"id": "stop", "method": "stopSession"})
+            await _read_until_response(self.reader, "stop")
+
+    async def test_running_session_config_update_hot_applies_safe_dials(self) -> None:
+        avatar_dir = self.session.app_support / "avatars" / "me"
+        avatar_dir.mkdir(parents=True)
+        (avatar_dir / "metadata.json").write_text("{}")
+        calls = []
+
+        def fake_run_camera(opts):
+            calls.append(opts)
+            while not opts.stop_event.is_set():
+                time.sleep(0.01)
+            return {"displayed": 0}
+
+        with mock.patch.object(backend_module, "run_camera", side_effect=fake_run_camera):
+            await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "me", "precision": "fp16"}})
+            await _read_until_response(self.reader, "start")
+            for _ in range(100):
+                if calls:
+                    break
+                await asyncio.sleep(0.01)
+            original_stop_event = calls[0].stop_event
+
+            await _send_json(
+                self.writer,
+                {
+                    "id": "config",
+                    "method": "setSessionConfig",
+                    "params": {
+                        "precision": "q8",
+                        "generatedFps": 25.0,
+                        "audioDelayMs": 300,
+                        "vadThreshold": 0.02,
+                        "audioWindowSeconds": 0.8,
+                    },
+                },
+            )
+            config_messages = await _read_until_response(self.reader, "config")
+
+            result = config_messages[-1]["result"]
+            self.assertEqual(result["state"], "running")
+            self.assertEqual(result["precision"], "fp16")
+            self.assertEqual(result["pendingPrecision"], "q8")
+            self.assertEqual(result["generatedFps"], 25.0)
+            self.assertEqual(result["audioDelayMs"], 300)
+            self.assertEqual(result["vadThreshold"], 0.02)
+            self.assertEqual(result["audioWindowSeconds"], 0.8)
+            self.assertFalse(original_stop_event.is_set())
+            self.assertEqual(len(calls), 1)
+            snapshot = calls[0].control.snapshot()
+            self.assertEqual(snapshot.config.precision, "q8")
+            self.assertEqual(snapshot.config.generated_fps, 25.0)
+            self.assertEqual(snapshot.config.delay_ms, 300)
+            self.assertEqual(snapshot.config.vad_threshold, 0.02)
+            self.assertEqual(snapshot.config.audio_window_seconds, 0.8)
+
+            await _send_json(self.writer, {"id": "revert", "method": "setSessionConfig", "params": {"precision": "fp16"}})
+            revert_messages = await _read_until_response(self.reader, "revert")
+            self.assertIsNone(revert_messages[-1]["result"]["pendingPrecision"])
+            self.assertEqual(calls[0].control.snapshot().config.precision, "fp16")
+
+            await _send_json(self.writer, {"id": "stop", "method": "stopSession"})
+            await _read_until_response(self.reader, "stop")
+
     async def test_start_session_rejects_unprepared_avatar(self) -> None:
         await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "missing"}})
         response = await _read_json(self.reader)

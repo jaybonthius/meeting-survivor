@@ -4,7 +4,7 @@
 
 - Feature specs live in `specs/`; implementation tickets live in `tickets/`.
 - Treat each spec as a feature track. Work one ticket at a time.
-- Current ticket: `tickets/007-virtual-microphone-spike.md`.
+- Current focus: native app demo polish; pick the newest unimplemented ticket in `tickets/` unless the user names another one.
 - Keep the existing CLI/OBS/BlackHole MVP working while building the native macOS app track.
 
 ## Engineering style

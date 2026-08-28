@@ -14,7 +14,7 @@ from typing import Any
 from .audio import list_audio_devices_data
 from .avatar import AvatarPreparationCancelled, prepare_avatar
 from .camera_transport import CameraFrameWriter
-from .live import RunOptions, run_camera
+from .live import LiveSessionConfig, LiveSessionControl, RunOptions, run_camera
 from .models import MODEL_REPOS
 from .protocol import PROTOCOL_VERSION, ProtocolError, error_response, event, parse_request, result_response
 
@@ -41,6 +41,11 @@ class BackendServer:
             "precision": "fp16",
             "generatedFps": 12.5,
             "audioDelayMs": 400,
+            "vadThreshold": 0.012,
+            "audioWindowSeconds": 1.2,
+            "pendingAvatarId": None,
+            "pendingPrecision": None,
+            "controlStatus": "Ready",
             "startedAt": None,
         }
         self._session_stop: threading.Event | None = None
@@ -52,6 +57,7 @@ class BackendServer:
         self._preview_sender_task: asyncio.Task | None = None
         self._latest_session_stats = self._empty_session_stats()
         self._camera_frame_writer: CameraFrameWriter | None = None
+        self._session_control: LiveSessionControl | None = None
         self._owns_socket = False
 
     async def start(self) -> None:
@@ -143,6 +149,8 @@ class BackendServer:
             return await self._set_active_avatar(writer, params)
         if method == "setAudioDelay":
             return await self._set_audio_delay(writer, params)
+        if method == "setSessionConfig":
+            return await self._set_session_config(writer, params)
         if method == "shutdown":
             await self._stop_session_runtime()
             self._cancel_all_operations()
@@ -253,8 +261,10 @@ class BackendServer:
         input_device_id = self._optional_string_param(params, "inputDeviceId")
         output_device_id = self._optional_string_param(params, "outputDeviceId")
         precision = self._choice_param(params, "precision", set(MODEL_REPOS), self._session["precision"])
-        generated_fps = self._optional_float_param(params, "generatedFps", self._session["generatedFps"], minimum=0.0)
+        generated_fps = self._generated_fps_param(params, self._session["generatedFps"])
         audio_delay_ms = self._int_param(params, "audioDelayMs", self._session["audioDelayMs"], minimum=0)
+        vad_threshold = self._optional_float_param(params, "vadThreshold", self._session["vadThreshold"], minimum=0.0)
+        audio_window_seconds = self._optional_float_param(params, "audioWindowSeconds", self._session["audioWindowSeconds"], minimum=0.0)
         virtual_camera = self._bool_param(params, "virtualCamera", False)
         virtual_microphone = self._bool_param(params, "virtualMicrophone", False)
         if virtual_camera and self.camera_frame_dir is None:
@@ -272,10 +282,16 @@ class BackendServer:
                 "precision": precision,
                 "generatedFps": generated_fps,
                 "audioDelayMs": audio_delay_ms,
+                "vadThreshold": vad_threshold,
+                "audioWindowSeconds": audio_window_seconds,
+                "pendingAvatarId": None,
+                "pendingPrecision": None,
+                "controlStatus": "Ready",
                 "startedAt": time.time(),
             }
         )
         self._latest_session_stats = self._empty_session_stats()
+        self._session_control = LiveSessionControl(self._live_session_config(avatar_id))
         self._start_session_runtime(writer)
         state = self._session_state()
         await self._write_message(writer, event("sessionState", **state))
@@ -284,8 +300,7 @@ class BackendServer:
 
     async def _stop_session(self, writer: asyncio.StreamWriter) -> dict[str, Any]:
         await self._stop_session_runtime()
-        self._session["state"] = "stopped"
-        self._session["startedAt"] = None
+        self._session.update({"state": "stopped", "startedAt": None, "pendingAvatarId": None, "pendingPrecision": None, "controlStatus": "Ready"})
         state = self._session_state()
         await self._write_message(writer, event("sessionState", **state))
         await self._write_message(writer, event("sessionStats", **self._session_stats()))
@@ -295,10 +310,18 @@ class BackendServer:
         avatar_id = params.get("avatarId")
         if not isinstance(avatar_id, str) or not avatar_id:
             raise ProtocolError("invalidParams", "avatarId must be a prepared avatar id")
-        self._session["activeAvatarId"] = self._require_ready_avatar(avatar_id)
-        if self._session["state"] == "running":
-            await self._stop_session_runtime()
-            self._start_session_runtime(writer)
+        avatar_id = self._require_ready_avatar(avatar_id)
+        if self._session["state"] == "running" and self._session_control is not None:
+            if avatar_id != self._session.get("activeAvatarId"):
+                self._session["pendingAvatarId"] = avatar_id
+                self._session["controlStatus"] = f"Loading {avatar_id}"
+            else:
+                self._session["pendingAvatarId"] = None
+                if self._session.get("pendingPrecision") is None:
+                    self._session["controlStatus"] = "Ready"
+            self._session_control.update(avatar_dir=self.avatars_dir / avatar_id)
+        else:
+            self._session.update({"activeAvatarId": avatar_id, "pendingAvatarId": None, "controlStatus": "Ready"})
         state = self._session_state()
         await self._write_message(writer, event("sessionState", **state))
         return state
@@ -307,12 +330,93 @@ class BackendServer:
         if "audioDelayMs" not in params:
             raise ProtocolError("invalidParams", "audioDelayMs is required")
         self._session["audioDelayMs"] = self._int_param(params, "audioDelayMs", 0, minimum=0)
-        if self._session["state"] == "running":
-            await self._stop_session_runtime()
-            self._start_session_runtime(writer)
+        if self._session["state"] == "running" and self._session_control is not None:
+            self._session_control.update(delay_ms=self._session["audioDelayMs"])
         state = self._session_state()
         await self._write_message(writer, event("sessionState", **state))
         return state
+
+    async def _set_session_config(self, writer: asyncio.StreamWriter, params: dict[str, Any]) -> dict[str, Any]:
+        precision = self._optional_choice_param(params, "precision", set(MODEL_REPOS))
+        generated_fps = self._generated_fps_param(params, None) if "generatedFps" in params else None
+        audio_delay_ms = self._int_param(params, "audioDelayMs", self._session["audioDelayMs"], minimum=0) if "audioDelayMs" in params else None
+        vad_threshold = self._optional_float_param(params, "vadThreshold", None, minimum=0.0) if "vadThreshold" in params else None
+        audio_window_seconds = self._optional_float_param(params, "audioWindowSeconds", None, minimum=0.0) if "audioWindowSeconds" in params else None
+
+        control_kwargs: dict[str, Any] = {}
+        if generated_fps is not None:
+            self._session["generatedFps"] = generated_fps
+            control_kwargs["generated_fps"] = generated_fps
+        if audio_delay_ms is not None:
+            self._session["audioDelayMs"] = audio_delay_ms
+            control_kwargs["delay_ms"] = audio_delay_ms
+        if vad_threshold is not None:
+            self._session["vadThreshold"] = vad_threshold
+            control_kwargs["vad_threshold"] = vad_threshold
+        if audio_window_seconds is not None:
+            self._session["audioWindowSeconds"] = audio_window_seconds
+            control_kwargs["audio_window_seconds"] = audio_window_seconds
+        if precision is not None:
+            if self._session["state"] == "running" and self._session_control is not None:
+                if precision != self._session["precision"]:
+                    self._session["pendingPrecision"] = precision
+                    self._session["controlStatus"] = f"Loading {precision}"
+                else:
+                    self._session["pendingPrecision"] = None
+                    if self._session.get("pendingAvatarId") is None:
+                        self._session["controlStatus"] = "Ready"
+                control_kwargs["precision"] = precision
+            else:
+                self._session["precision"] = precision
+                self._session["pendingPrecision"] = None
+        if self._session["state"] == "running" and self._session_control is not None and control_kwargs:
+            self._session_control.update(**control_kwargs)
+        state = self._session_state()
+        await self._write_message(writer, event("sessionState", **state))
+        return state
+
+    def _live_session_config(self, avatar_id: str) -> LiveSessionConfig:
+        return LiveSessionConfig(
+            avatar_dir=self.avatars_dir / avatar_id,
+            precision=self._session["precision"],
+            delay_ms=self._session["audioDelayMs"],
+            generated_fps=self._session["generatedFps"],
+            vad_threshold=self._session["vadThreshold"],
+            audio_window_seconds=self._session["audioWindowSeconds"],
+        )
+
+    async def _session_control_event(self, writer: asyncio.StreamWriter, generation: int, payload: dict[str, Any]) -> None:
+        if generation != self._session_generation or self._session["state"] != "running":
+            return
+        status = payload.get("status")
+        message = payload.get("message")
+        if isinstance(message, str) and message:
+            self._session["controlStatus"] = message
+        if status == "applied":
+            avatar_id = payload.get("avatarId")
+            precision = payload.get("precision")
+            if isinstance(avatar_id, str) and avatar_id:
+                self._session["activeAvatarId"] = avatar_id
+            if isinstance(precision, str) and precision:
+                self._session["precision"] = precision
+            for source_key, session_key in (
+                ("generatedFps", "generatedFps"),
+                ("audioDelayMs", "audioDelayMs"),
+                ("vadThreshold", "vadThreshold"),
+                ("audioWindowSeconds", "audioWindowSeconds"),
+            ):
+                if source_key in payload:
+                    self._session[session_key] = payload[source_key]
+            self._session["pendingAvatarId"] = None
+            self._session["pendingPrecision"] = None
+            self._session["controlStatus"] = "Ready"
+            await self._write_message(writer, event("sessionState", **self._session_state()))
+        elif status == "failed":
+            self._session["pendingAvatarId"] = None
+            self._session["pendingPrecision"] = None
+            self._session["controlStatus"] = message or "Control update failed"
+            await self._write_message(writer, event("sessionState", **self._session_state()))
+        await self._write_message(writer, event("sessionControl", **payload))
 
     def _start_session_runtime(self, writer: asyncio.StreamWriter) -> None:
         active_avatar_id = self._session.get("activeAvatarId")
@@ -323,6 +427,9 @@ class BackendServer:
         stop_event = threading.Event()
         self._session_stop = stop_event
         loop = asyncio.get_running_loop()
+        if self._session_control is None:
+            self._session_control = LiveSessionControl(self._live_session_config(active_avatar_id))
+        session_control = self._session_control
         self._preview_sender_task = asyncio.create_task(self._send_preview_frames(writer, generation, stop_event))
         camera_frame_writer = CameraFrameWriter(self.camera_frame_dir) if self._session.get("virtualCamera") and self.camera_frame_dir else None
         self._camera_frame_writer = camera_frame_writer
@@ -351,6 +458,11 @@ class BackendServer:
                 loop,
             )
 
+        def control_callback(payload: dict[str, Any]) -> None:
+            if stop_event.is_set() or generation != self._session_generation:
+                return
+            asyncio.run_coroutine_threadsafe(self._session_control_event(writer, generation, payload), loop)
+
         def worker() -> None:
             try:
                 run_camera(
@@ -361,10 +473,14 @@ class BackendServer:
                         output_device=self._session.get("outputDeviceId") if self._session.get("virtualMicrophone") else None,
                         delay_ms=self._session["audioDelayMs"],
                         generated_fps=self._session["generatedFps"],
+                        vad_threshold=self._session["vadThreshold"],
+                        audio_window_seconds=self._session["audioWindowSeconds"],
                         no_preview=True,
                         stop_event=stop_event,
                         frame_callback=frame_callback,
                         stats_callback=stats_callback,
+                        control=session_control,
+                        control_callback=control_callback,
                     )
                 )
             except Exception as exc:
@@ -386,6 +502,7 @@ class BackendServer:
         if self._session_thread is not None and self._session_thread.is_alive():
             await asyncio.to_thread(self._session_thread.join, 2.0)
         self._session_thread = None
+        self._session_control = None
         if self._camera_frame_writer is not None:
             await asyncio.to_thread(self._camera_frame_writer.clear)
             self._camera_frame_writer = None
@@ -395,8 +512,8 @@ class BackendServer:
     async def _session_runtime_failed(self, writer: asyncio.StreamWriter, generation: int, exc: Exception) -> None:
         if generation != self._session_generation or self._session["state"] != "running":
             return
-        self._session["state"] = "stopped"
-        self._session["startedAt"] = None
+        self._session.update({"state": "stopped", "startedAt": None, "pendingAvatarId": None, "pendingPrecision": None, "controlStatus": "Ready"})
+        self._session_control = None
         if self._session_stop is not None:
             self._session_stop.set()
             self._session_stop = None
@@ -525,6 +642,25 @@ class BackendServer:
         value = params.get(name, default)
         if not isinstance(value, str) or value not in choices:
             raise ProtocolError("invalidParams", f"{name} must be one of: {', '.join(sorted(choices))}")
+        return value
+
+    def _optional_choice_param(self, params: dict[str, Any], name: str, choices: set[str]) -> str | None:
+        if name not in params:
+            return None
+        value = params.get(name)
+        if not isinstance(value, str) or value not in choices:
+            raise ProtocolError("invalidParams", f"{name} must be one of: {', '.join(sorted(choices))}")
+        return value
+
+    def _generated_fps_param(self, params: dict[str, Any], default: float | None) -> float | None:
+        value = params.get("generatedFps", default)
+        if value is None:
+            return None
+        if not isinstance(value, int | float) or isinstance(value, bool):
+            raise ProtocolError("invalidParams", "generatedFps must be a number")
+        value = float(value)
+        if value not in {12.5, 25.0}:
+            raise ProtocolError("invalidParams", "generatedFps must be one of: 12.5, 25.0")
         return value
 
     def _optional_string_param(self, params: dict[str, Any], name: str) -> str | None:

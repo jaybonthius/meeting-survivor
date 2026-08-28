@@ -95,10 +95,25 @@ class SampleRing:
 class DelayLine:
     def __init__(self, delay_seconds: float, sample_rate: int, max_extra_seconds: float = 2.0):
         self._lock = threading.Lock()
+        self._sample_rate = sample_rate
+        self._max_extra_seconds = max_extra_seconds
         delay_samples = int(delay_seconds * sample_rate)
         max_samples = delay_samples + int(max_extra_seconds * sample_rate)
         self._queue: collections.deque[float] = collections.deque(maxlen=max_samples)
         self._queue.extend([0.0] * delay_samples)
+
+    def set_delay_seconds(self, delay_seconds: float) -> None:
+        target_samples = max(0, int(delay_seconds * self._sample_rate))
+        max_samples = target_samples + int(self._max_extra_seconds * self._sample_rate)
+        with self._lock:
+            if self._queue.maxlen != max_samples:
+                self._queue = collections.deque(self._queue, maxlen=max_samples)
+            current_samples = len(self._queue)
+            if current_samples < target_samples:
+                self._queue.extendleft(0.0 for _ in range(target_samples - current_samples))
+            elif current_samples > target_samples:
+                for _ in range(current_samples - target_samples):
+                    self._queue.popleft()
 
     def push(self, samples: np.ndarray) -> None:
         with self._lock:
@@ -180,6 +195,11 @@ class LiveAudio:
             if stream is not None:
                 stream.stop()
                 stream.close()
+
+    def set_delay_ms(self, delay_ms: int) -> None:
+        self.delay_ms = delay_ms
+        if self.delay is not None:
+            self.delay.set_delay_seconds(delay_ms / 1000.0)
 
     def recent_16k(self, seconds: float) -> np.ndarray:
         return self.ring16.tail(seconds, 16000)

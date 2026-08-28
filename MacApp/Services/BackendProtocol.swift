@@ -81,8 +81,13 @@ struct BackendEvent: Decodable, Sendable, Equatable {
     let current: Int?
     let total: Int?
     let message: String?
+    let status: String?
     let state: String?
+    let avatarId: String?
     let activeAvatarId: String?
+    let pendingAvatarId: String?
+    let pendingPrecision: String?
+    let controlStatus: String?
     let inputDeviceId: String?
     let outputDeviceId: String?
     let virtualCamera: Bool?
@@ -90,6 +95,8 @@ struct BackendEvent: Decodable, Sendable, Equatable {
     let precision: String?
     let generatedFps: Double?
     let audioDelayMs: Int?
+    let vadThreshold: Double?
+    let audioWindowSeconds: Double?
     let startedAt: Double?
     let previewFps: Double?
     let queueDepth: Int?
@@ -161,6 +168,11 @@ struct SessionStateResult: Decodable, Sendable, Equatable {
     let precision: String
     let generatedFps: Double
     let audioDelayMs: Int
+    let vadThreshold: Double
+    let audioWindowSeconds: Double
+    let pendingAvatarId: String?
+    let pendingPrecision: String?
+    let controlStatus: String?
     let startedAt: Double?
 
     var isRunning: Bool {
