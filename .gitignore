@@ -8,3 +8,7 @@ outputs/
 third_party/
 recording_*.mov
 recordings/
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
