@@ -112,11 +112,16 @@ class LiveAudio:
 
     def __post_init__(self):
         self.input_rate = int(sd.query_devices(self.input_device, "input")["default_samplerate"])
-        self.output_rate = int(sd.query_devices(self.output_device, "output")["default_samplerate"])
+        if self.output_device is None:
+            self.output_rate = self.input_rate
+            self.output_block = 0
+            self.delay = None
+        else:
+            self.output_rate = int(sd.query_devices(self.output_device, "output")["default_samplerate"])
+            self.output_block = max(1, int(self.output_rate * self.block_ms / 1000))
+            self.delay = DelayLine(self.delay_ms / 1000.0, self.output_rate)
         self.input_block = max(1, int(self.input_rate * self.block_ms / 1000))
-        self.output_block = max(1, int(self.output_rate * self.block_ms / 1000))
         self.ring16 = SampleRing(int(16000 * self.rolling_seconds))
-        self.delay = DelayLine(self.delay_ms / 1000.0, self.output_rate)
         self.started_at = time.monotonic()
         self._input_stream = None
         self._output_stream = None
@@ -126,7 +131,8 @@ class LiveAudio:
             if status:
                 print(status, flush=True)
             mono = mono_float32(indata)
-            self.delay.push(resample_linear(mono, self.input_rate, self.output_rate))
+            if self.delay is not None:
+                self.delay.push(resample_linear(mono, self.input_rate, self.output_rate))
             self.ring16.append(resample_linear(mono, self.input_rate, 16000))
 
         def output_cb(outdata, frames, time_info, status):
@@ -146,16 +152,18 @@ class LiveAudio:
             dtype="float32",
             callback=input_cb,
         )
-        self._output_stream = sd.OutputStream(
-            device=self.output_device,
-            channels=1,
-            samplerate=self.output_rate,
-            blocksize=self.output_block,
-            dtype="float32",
-            callback=output_cb,
-        )
+        if self.output_device is not None:
+            self._output_stream = sd.OutputStream(
+                device=self.output_device,
+                channels=1,
+                samplerate=self.output_rate,
+                blocksize=self.output_block,
+                dtype="float32",
+                callback=output_cb,
+            )
         self._input_stream.start()
-        self._output_stream.start()
+        if self._output_stream is not None:
+            self._output_stream.start()
 
     def stop(self) -> None:
         for stream in (self._input_stream, self._output_stream):

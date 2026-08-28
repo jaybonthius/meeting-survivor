@@ -95,6 +95,13 @@ struct BackendEvent: Decodable, Sendable, Equatable {
     let queueDepth: Int?
     let droppedJobs: Int?
     let renderMs: Double?
+    let previewPath: String?
+    let previewSequence: Int?
+    let previewGeneration: Int?
+    let previewFormat: String?
+    let previewWidth: Int?
+    let previewHeight: Int?
+    let previewTimestamp: Double?
 }
 
 struct HandshakeResult: Decodable, Sendable, Equatable {

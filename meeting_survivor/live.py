@@ -7,6 +7,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 import cv2
 import mlx.core as mx
@@ -34,6 +35,9 @@ class RunOptions:
     output_wav: Path | None = None
     duration_seconds: float | None = None
     no_preview: bool = False
+    stop_event: threading.Event | None = None
+    frame_callback: Callable[[np.ndarray], None] | None = None
+    stats_callback: Callable[[dict], None] | None = None
 
 
 class SpeechGate:
@@ -89,9 +93,10 @@ def run_camera(opts: RunOptions) -> dict:
     weights = ensure_weights(opts.precision, opts.weights_dir, allow_download=False)
     pipe = load_pipeline(weights)
 
-    stop = threading.Event()
-    signal.signal(signal.SIGINT, lambda *_: stop.set())
-    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    stop = opts.stop_event or threading.Event()
+    if opts.stop_event is None and threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGINT, lambda *_: stop.set())
+        signal.signal(signal.SIGTERM, lambda *_: stop.set())
 
     frame_period = 1.0 / 25.0
     generation_stride = 2 if opts.generated_fps <= 12.5 else 1
@@ -219,6 +224,11 @@ def run_camera(opts: RunOptions) -> dict:
 
             if writer:
                 writer.write(out)
+            if opts.frame_callback:
+                try:
+                    opts.frame_callback(out)
+                except Exception:
+                    logging.exception("preview frame callback failed")
             if not opts.no_preview:
                 cv2.imshow("meeting-survivor", out)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -231,7 +241,22 @@ def run_camera(opts: RunOptions) -> dict:
                 stats["missed"] += 1
             next_tick += frame_period
             if time.monotonic() - last_log >= 2.0:
-                fps = stats["displayed"] / max(0.001, time.monotonic() - started_at)
+                elapsed_for_stats = max(0.001, time.monotonic() - started_at)
+                fps = stats["displayed"] / elapsed_for_stats
+                generated_fps = stats["generated"] / elapsed_for_stats
+                if opts.stats_callback:
+                    try:
+                        opts.stats_callback(
+                            {
+                                "previewFps": fps,
+                                "generatedFps": generated_fps,
+                                "queueDepth": jobs.qsize(),
+                                "droppedJobs": stats["dropped_jobs"],
+                                "renderMs": latest_render_time * 1000,
+                            }
+                        )
+                    except Exception:
+                        logging.exception("session stats callback failed")
                 logging.info(
                     "preview_fps=%.1f generated=%s queue=%s missed=%s dropped=%s last_render_ms=%.0f rms=%.4f speaking=%s",
                     fps,

@@ -5,10 +5,14 @@ import contextlib
 import io
 import json
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 from unittest import mock
+
+import cv2
+import numpy as np
 
 from meeting_survivor import backend as backend_module
 from meeting_survivor.avatar import AvatarPreparationCancelled
@@ -252,32 +256,113 @@ class BackendIPCTests(unittest.IsolatedAsyncioTestCase):
         delay_messages = await _read_until_response(self.reader, "delay")
         self.assertEqual(delay_messages[-1]["result"]["audioDelayMs"], 450)
 
-        await _send_json(
-            self.writer,
-            {
-                "id": "start",
-                "method": "startSession",
-                "params": {"avatarId": "me", "inputDeviceId": "mic-1", "outputDeviceId": "out-1", "audioDelayMs": 500},
-            },
-        )
-        start_messages = await _read_until_response(self.reader, "start")
-        event_types = {m["params"]["type"] for m in start_messages if m.get("method") == "event"}
-        start_response = start_messages[-1]
-        self.assertIn("sessionState", event_types)
-        self.assertIn("sessionStats", event_types)
-        self.assertEqual(start_response["result"]["state"], "running")
-        self.assertEqual(start_response["result"]["inputDeviceId"], "mic-1")
-        self.assertEqual(start_response["result"]["outputDeviceId"], "out-1")
-        self.assertEqual(start_response["result"]["audioDelayMs"], 500)
-        self.assertIsInstance(start_response["result"]["startedAt"], float)
+        def fake_run_camera(opts):
+            while not opts.stop_event.is_set():
+                time.sleep(0.01)
+            return {"displayed": 0}
 
-        await _send_json(self.writer, {"id": "stop", "method": "stopSession"})
-        stop_messages = await _read_until_response(self.reader, "stop")
+        with mock.patch.object(backend_module, "run_camera", side_effect=fake_run_camera):
+            await _send_json(
+                self.writer,
+                {
+                    "id": "start",
+                    "method": "startSession",
+                    "params": {"avatarId": "me", "inputDeviceId": "mic-1", "outputDeviceId": "out-1", "audioDelayMs": 500},
+                },
+            )
+            start_messages = await _read_until_response(self.reader, "start")
+            event_types = {m["params"]["type"] for m in start_messages if m.get("method") == "event"}
+            start_response = start_messages[-1]
+            self.assertIn("sessionState", event_types)
+            self.assertIn("sessionStats", event_types)
+            self.assertEqual(start_response["result"]["state"], "running")
+            self.assertEqual(start_response["result"]["inputDeviceId"], "mic-1")
+            self.assertEqual(start_response["result"]["outputDeviceId"], "out-1")
+            self.assertEqual(start_response["result"]["audioDelayMs"], 500)
+            self.assertIsInstance(start_response["result"]["startedAt"], float)
+
+            await _send_json(self.writer, {"id": "stop", "method": "stopSession"})
+            stop_messages = await _read_until_response(self.reader, "stop")
         self.assertEqual(stop_messages[-1]["result"]["state"], "stopped")
         self.assertIsNone(stop_messages[-1]["result"]["startedAt"])
 
     async def test_start_session_rejects_unprepared_avatar(self) -> None:
         await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "missing"}})
+        response = await _read_json(self.reader)
+        self.assertEqual(response["id"], "start")
+        self.assertEqual(response["error"]["code"], "invalidParams")
+
+    async def test_start_session_emits_preview_frame_path_and_stats(self) -> None:
+        avatar_dir = self.session.app_support / "avatars" / "me"
+        avatar_dir.mkdir(parents=True)
+        (avatar_dir / "metadata.json").write_text("{}")
+
+        def fake_run_camera(opts):
+            frame = np.zeros((4, 6, 3), dtype=np.uint8)
+            frame[:, :, 1] = 128
+            opts.frame_callback(frame)
+            opts.stats_callback({"previewFps": 25.0, "generatedFps": 12.5, "queueDepth": 1, "droppedJobs": 2, "renderMs": 33.0})
+            while not opts.stop_event.is_set():
+                time.sleep(0.01)
+            return {"displayed": 1}
+
+        with mock.patch.object(backend_module, "run_camera", side_effect=fake_run_camera):
+            await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "me"}})
+            messages = []
+            while not (
+                any(m.get("method") == "event" and m["params"]["type"] == "previewFrame" for m in messages)
+                and any(
+                    m.get("method") == "event"
+                    and m["params"]["type"] == "sessionStats"
+                    and m["params"]["previewFps"] == 25.0
+                    for m in messages
+                )
+            ):
+                messages.append(await _read_json(self.reader))
+            await _send_json(self.writer, {"id": "stop", "method": "stopSession"})
+            await _read_until_response(self.reader, "stop")
+
+        frame_event = next(m for m in messages if m.get("method") == "event" and m["params"]["type"] == "previewFrame")
+        stats_event = next(
+            m for m in messages
+            if m.get("method") == "event" and m["params"]["type"] == "sessionStats" and m["params"]["previewFps"] == 25.0
+        )
+        frame_path = Path(frame_event["params"]["previewPath"])
+        self.assertTrue(frame_path.resolve().is_relative_to((self.session.app_support / "preview").resolve()))
+        self.assertTrue(frame_path.exists())
+        self.assertIsNotNone(cv2.imread(str(frame_path)))
+        self.assertEqual(frame_event["params"]["previewSequence"], 1)
+        self.assertEqual(frame_event["params"]["previewWidth"], 6)
+        self.assertEqual(frame_event["params"]["previewHeight"], 4)
+        self.assertEqual(stats_event["params"]["previewFps"], 25.0)
+        self.assertEqual(stats_event["params"]["queueDepth"], 1)
+
+    async def test_stop_session_signals_preview_worker(self) -> None:
+        avatar_dir = self.session.app_support / "avatars" / "me"
+        avatar_dir.mkdir(parents=True)
+        (avatar_dir / "metadata.json").write_text("{}")
+        stopped = threading.Event()
+
+        def fake_run_camera(opts):
+            while not opts.stop_event.is_set():
+                time.sleep(0.01)
+            stopped.set()
+            return {"displayed": 0}
+
+        with mock.patch.object(backend_module, "run_camera", side_effect=fake_run_camera):
+            await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "me"}})
+            await _read_until_response(self.reader, "start")
+            await _send_json(self.writer, {"id": "stop", "method": "stopSession"})
+            stop_messages = await _read_until_response(self.reader, "stop")
+
+        self.assertTrue(stopped.is_set())
+        self.assertEqual(stop_messages[-1]["result"]["state"], "stopped")
+
+    async def test_generated_fps_must_be_positive(self) -> None:
+        avatar_dir = self.session.app_support / "avatars" / "me"
+        avatar_dir.mkdir(parents=True)
+        (avatar_dir / "metadata.json").write_text("{}")
+        await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "me", "generatedFps": 0.0}})
         response = await _read_json(self.reader)
         self.assertEqual(response["id"], "start")
         self.assertEqual(response["error"]["code"], "invalidParams")

@@ -1,6 +1,6 @@
 # Ticket 004: App preview frame path
 
-Status: `placeholder`
+Status: `implemented`
 
 Spec: [`specs/002-native-macos-app.md`](../specs/002-native-macos-app.md)
 

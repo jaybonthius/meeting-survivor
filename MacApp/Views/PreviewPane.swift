@@ -5,9 +5,15 @@ struct PreviewPane: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            RoundedRectangle(cornerRadius: 16)
-                .fill(.black.gradient)
-                .overlay {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(.black.gradient)
+                if let image = model.previewImage {
+                    Image(nsImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
+                } else {
                     VStack(spacing: 8) {
                         Image(systemName: model.sessionState.isRunning ? "video.fill" : "video")
                             .font(.system(size: 48))
@@ -18,8 +24,9 @@ struct PreviewPane: View {
                     }
                     .foregroundStyle(.white.opacity(0.85))
                 }
-                .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                .padding()
+            }
+            .aspectRatio(16.0 / 9.0, contentMode: .fit)
+            .padding()
 
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                 StatusRow(label: "App", value: model.appServiceStatus)

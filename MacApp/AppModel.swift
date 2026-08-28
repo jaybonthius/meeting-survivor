@@ -20,10 +20,12 @@ final class AppModel: ObservableObject {
     @Published var isSessionActionInFlight = false
     @Published var sessionState = SessionStateResult.stopped
     @Published var sessionStats: SessionStatsResult?
+    @Published var previewImage: NSImage?
 
     private var backendProcess: BackendProcess?
     private var backendClient: BackendClient?
     private var didStartBackend = false
+    private var latestPreviewSequence = 0
 
     var selectedAvatarName: String {
         guard let selectedAvatarID else { return "None" }
@@ -151,6 +153,8 @@ final class AppModel: ObservableObject {
         isSessionActionInFlight = true
         defer { isSessionActionInFlight = false }
         do {
+            previewImage = nil
+            latestPreviewSequence = 0
             let state = try await backendClient.startSession(
                 avatarId: selectedAvatarID,
                 inputDeviceId: selectedInputDeviceID.nilIfEmpty,
@@ -201,6 +205,10 @@ final class AppModel: ObservableObject {
     private func applySessionState(_ state: SessionStateResult) {
         sessionState = state
         sessionStatus = state.isRunning ? "Running" : "Stopped"
+        if !state.isRunning {
+            previewImage = nil
+            latestPreviewSequence = 0
+        }
         if let activeAvatarId = state.activeAvatarId {
             selectedAvatarID = activeAvatarId
         }
@@ -237,8 +245,26 @@ final class AppModel: ObservableObject {
             if let stats = sessionStats(from: event) {
                 sessionStats = stats
             }
+        case "previewFrame":
+            loadPreviewFrame(from: event)
         default:
             activityStatus = event.type
+        }
+    }
+
+    private func loadPreviewFrame(from event: BackendEvent) {
+        guard let path = event.previewPath,
+              let sequence = event.previewSequence,
+              sequence > latestPreviewSequence else {
+            return
+        }
+        latestPreviewSequence = sequence
+        Task.detached(priority: .userInitiated) { [path, sequence] in
+            let image = NSImage(contentsOfFile: path)
+            await MainActor.run {
+                guard sequence >= self.latestPreviewSequence else { return }
+                self.previewImage = image
+            }
         }
     }
 
