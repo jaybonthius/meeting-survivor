@@ -111,13 +111,13 @@ final class BackendClient: @unchecked Sendable {
         return try decode(SessionStateResult.self, from: result, method: "getSessionState")
     }
 
-    func startSession(avatarId: String, inputDeviceId: String?, outputDeviceId: String?, audioDelayMs: Int) async throws -> SessionStateResult {
+    func startSession(avatarId: String, inputDeviceId: String?, outputDeviceId: String?, audioDelayMs: Int, virtualCamera: Bool) async throws -> SessionStateResult {
         var params: [String: JSONValue] = [
             "avatarId": .string(avatarId),
             "audioDelayMs": .int(audioDelayMs),
             "generatedFps": .number(12.5),
             "precision": .string("q8"),
-            "virtualCamera": .bool(false),
+            "virtualCamera": .bool(virtualCamera),
             "virtualMicrophone": .bool(false),
         ]
         if let inputDeviceId, !inputDeviceId.isEmpty {

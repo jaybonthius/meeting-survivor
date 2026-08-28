@@ -28,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
     backend = sub.add_parser("backend", help="run structured local IPC backend")
     backend.add_argument("--socket", type=Path, required=True, help="Unix domain socket path")
     backend.add_argument("--app-support", type=Path, required=True, help="app-owned state directory")
+    backend.add_argument("--camera-frame-dir", type=Path, help="app-group directory for virtual camera frames")
 
     prep = sub.add_parser("prepare", help="prepare an avatar from a 720p/25fps source video")
     prep.add_argument("video", type=Path)
@@ -71,7 +72,7 @@ def main(argv: list[str] | None = None) -> None:
             return
 
         if args.command == "backend":
-            run_backend(args.socket, args.app_support)
+            run_backend(args.socket, args.app_support, args.camera_frame_dir)
             return
 
         if args.command == "prepare":

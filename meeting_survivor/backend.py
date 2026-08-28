@@ -13,15 +13,17 @@ from typing import Any
 
 from .audio import list_audio_devices_data
 from .avatar import AvatarPreparationCancelled, prepare_avatar
+from .camera_transport import CameraFrameWriter
 from .live import RunOptions, run_camera
 from .models import MODEL_REPOS
 from .protocol import PROTOCOL_VERSION, ProtocolError, error_response, event, parse_request, result_response
 
 
 class BackendServer:
-    def __init__(self, socket_path: Path, app_support: Path):
+    def __init__(self, socket_path: Path, app_support: Path, camera_frame_dir: Path | None = None):
         self.socket_path = socket_path.expanduser().resolve()
         self.app_support = app_support.expanduser().resolve()
+        self.camera_frame_dir = camera_frame_dir.expanduser().resolve() if camera_frame_dir is not None else None
         self.avatars_dir = self.app_support / "avatars"
         self.preview_dir = self.app_support / "preview"
         self._server: asyncio.AbstractServer | None = None
@@ -49,6 +51,7 @@ class BackendServer:
         self._latest_preview_frame: dict[str, Any] | None = None
         self._preview_sender_task: asyncio.Task | None = None
         self._latest_session_stats = self._empty_session_stats()
+        self._camera_frame_writer: CameraFrameWriter | None = None
         self._owns_socket = False
 
     async def start(self) -> None:
@@ -254,6 +257,8 @@ class BackendServer:
         audio_delay_ms = self._int_param(params, "audioDelayMs", self._session["audioDelayMs"], minimum=0)
         virtual_camera = self._bool_param(params, "virtualCamera", False)
         virtual_microphone = self._bool_param(params, "virtualMicrophone", False)
+        if virtual_camera and self.camera_frame_dir is None:
+            raise ProtocolError("cameraFrameFeedUnavailable", "camera frame directory is not configured")
 
         await self._stop_session_runtime()
         self._session.update(
@@ -319,10 +324,19 @@ class BackendServer:
         self._session_stop = stop_event
         loop = asyncio.get_running_loop()
         self._preview_sender_task = asyncio.create_task(self._send_preview_frames(writer, generation, stop_event))
+        camera_frame_writer = CameraFrameWriter(self.camera_frame_dir) if self._session.get("virtualCamera") and self.camera_frame_dir else None
+        self._camera_frame_writer = camera_frame_writer
+        if camera_frame_writer is not None:
+            camera_frame_writer.clear()
 
         def frame_callback(frame: Any) -> None:
             if stop_event.is_set() or generation != self._session_generation:
                 return
+            if camera_frame_writer is not None:
+                try:
+                    camera_frame_writer.write_bgr(frame)
+                except Exception:
+                    logging.exception("camera frame feed write failed")
             encoded = self._encode_preview_frame(frame, generation)
             if encoded is not None:
                 with self._preview_lock:
@@ -372,6 +386,9 @@ class BackendServer:
         if self._session_thread is not None and self._session_thread.is_alive():
             await asyncio.to_thread(self._session_thread.join, 2.0)
         self._session_thread = None
+        if self._camera_frame_writer is not None:
+            await asyncio.to_thread(self._camera_frame_writer.clear)
+            self._camera_frame_writer = None
         with self._preview_lock:
             self._latest_preview_frame = None
 
@@ -380,6 +397,9 @@ class BackendServer:
             return
         self._session["state"] = "stopped"
         self._session["startedAt"] = None
+        if self._camera_frame_writer is not None:
+            await asyncio.to_thread(self._camera_frame_writer.clear)
+            self._camera_frame_writer = None
         await self._write_message(writer, event("error", severity="recoverable", message=str(exc) or exc.__class__.__name__))
         await self._write_message(writer, event("sessionState", **self._session_state()))
         await self._write_message(writer, event("sessionStats", **self._session_stats()))
@@ -528,10 +548,10 @@ class BackendServer:
             await writer.drain()
 
 
-async def run_backend_async(socket_path: Path, app_support: Path) -> None:
-    server = BackendServer(socket_path, app_support)
+async def run_backend_async(socket_path: Path, app_support: Path, camera_frame_dir: Path | None = None) -> None:
+    server = BackendServer(socket_path, app_support, camera_frame_dir)
     await server.start()
 
 
-def run_backend(socket_path: Path, app_support: Path) -> None:
-    asyncio.run(run_backend_async(socket_path, app_support))
+def run_backend(socket_path: Path, app_support: Path, camera_frame_dir: Path | None = None) -> None:
+    asyncio.run(run_backend_async(socket_path, app_support, camera_frame_dir))

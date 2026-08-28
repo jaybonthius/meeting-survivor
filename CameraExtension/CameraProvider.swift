@@ -1,6 +1,7 @@
 import CoreMedia
 import CoreMediaIO
 import CoreVideo
+import Darwin
 import Foundation
 import IOKit.audio
 import os.log
@@ -8,8 +9,23 @@ import os.log
 private let cameraWidth: Int32 = 1280
 private let cameraHeight: Int32 = 720
 private let cameraFrameRate: Int32 = 25
+private let cameraAppGroupID = "group.com.meetingsurvivor.camera"
+private let cameraFrameDirectoryName = "CameraFrames"
+private let cameraFrameMetadataName = "latest.json"
+private let cameraExpectedBytesPerRow = Int(cameraWidth) * 4
+private let cameraExpectedByteCount = cameraExpectedBytesPerRow * Int(cameraHeight)
 private let deviceID = UUID(uuidString: "9D3A4A13-476E-4C54-9EA3-9E02C8CB28D4")!
 private let streamID = UUID(uuidString: "B1E19E4D-3400-48DB-817B-C5F4CF59E472")!
+
+private struct CameraFrameMetadata: Decodable {
+    let sequence: Int
+    let state: String
+    let frameFile: String?
+    let width: Int?
+    let height: Int?
+    let pixelFormat: String?
+    let bytesPerRow: Int?
+}
 
 final class CameraProviderSource: NSObject, CMIOExtensionProviderSource {
     private(set) var provider: CMIOExtensionProvider!
@@ -54,6 +70,10 @@ final class CameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
     private var videoDescription: CMFormatDescription!
     private var bufferPool: CVPixelBufferPool!
     private let bufferAuxAttributes: NSDictionary = [kCVPixelBufferPoolAllocationThresholdKey: 5]
+    private let frameDirectory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: cameraAppGroupID)?.appendingPathComponent(cameraFrameDirectoryName, isDirectory: true)
+    private let decoder = JSONDecoder()
+    private var latestFrameSequence = 0
+    private var latestFrameData: Data?
 
     init(localizedName: String) {
         super.init()
@@ -104,7 +124,7 @@ final class CameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
         let timer = DispatchSource.makeTimerSource(flags: .strict, queue: timerQueue)
         timer.schedule(deadline: .now(), repeating: 1.0 / Double(cameraFrameRate), leeway: .milliseconds(1))
         timer.setEventHandler { [weak self] in
-            self?.sendStaticFrame()
+            self?.sendFrame()
         }
         timer.setCancelHandler {}
         self.timer = timer
@@ -121,7 +141,7 @@ final class CameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
         timer = nil
     }
 
-    private func sendStaticFrame() {
+    private func sendFrame() {
         var pixelBuffer: CVPixelBuffer?
         let createStatus = CVPixelBufferPoolCreatePixelBufferWithAuxAttributes(kCFAllocatorDefault, bufferPool, bufferAuxAttributes, &pixelBuffer)
         guard createStatus == kCVReturnSuccess, let pixelBuffer else {
@@ -155,6 +175,66 @@ final class CameraDeviceSource: NSObject, CMIOExtensionDeviceSource {
     }
 
     private func fill(pixelBuffer: CVPixelBuffer) {
+        if let frameData = sharedFrameData(), copySharedFrame(frameData, into: pixelBuffer) {
+            return
+        }
+        fillStaticFrame(pixelBuffer: pixelBuffer)
+    }
+
+    private func sharedFrameData() -> Data? {
+        guard let frameDirectory else {
+            return latestFrameData
+        }
+        let metadataURL = frameDirectory.appendingPathComponent(cameraFrameMetadataName)
+        guard let metadataData = try? Data(contentsOf: metadataURL),
+              let metadata = try? decoder.decode(CameraFrameMetadata.self, from: metadataData),
+              metadata.sequence > latestFrameSequence else {
+            return latestFrameData
+        }
+        if metadata.state != "running" {
+            latestFrameSequence = metadata.sequence
+            latestFrameData = nil
+            return nil
+        }
+        guard metadata.width == Int(cameraWidth),
+              metadata.height == Int(cameraHeight),
+              metadata.pixelFormat == "bgra8",
+              metadata.bytesPerRow == cameraExpectedBytesPerRow,
+              let frameFile = metadata.frameFile,
+              !frameFile.contains("/"),
+              !frameFile.contains(":") else {
+            return latestFrameData
+        }
+        let frameURL = frameDirectory.appendingPathComponent(frameFile)
+        guard let frameData = try? Data(contentsOf: frameURL), frameData.count == cameraExpectedByteCount else {
+            return latestFrameData
+        }
+        latestFrameSequence = metadata.sequence
+        latestFrameData = frameData
+        return frameData
+    }
+
+    private func copySharedFrame(_ data: Data, into pixelBuffer: CVPixelBuffer) -> Bool {
+        guard data.count == cameraExpectedByteCount,
+              CVPixelBufferGetWidth(pixelBuffer) == Int(cameraWidth),
+              CVPixelBufferGetHeight(pixelBuffer) == Int(cameraHeight) else {
+            return false
+        }
+        CVPixelBufferLockBaseAddress(pixelBuffer, [])
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+        guard let destination = CVPixelBufferGetBaseAddress(pixelBuffer) else { return false }
+        let destinationBytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        guard destinationBytesPerRow >= cameraExpectedBytesPerRow else { return false }
+        return data.withUnsafeBytes { sourceBuffer in
+            guard let source = sourceBuffer.baseAddress else { return false }
+            for y in 0..<Int(cameraHeight) {
+                memcpy(destination.advanced(by: y * destinationBytesPerRow), source.advanced(by: y * cameraExpectedBytesPerRow), cameraExpectedBytesPerRow)
+            }
+            return true
+        }
+    }
+
+    private func fillStaticFrame(pixelBuffer: CVPixelBuffer) {
         CVPixelBufferLockBaseAddress(pixelBuffer, [])
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
         guard let baseAddress = CVPixelBufferGetBaseAddress(pixelBuffer) else { return }

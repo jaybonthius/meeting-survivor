@@ -40,12 +40,13 @@ async def _read_until_response(reader: asyncio.StreamReader, request_id: str) ->
 
 
 class BackendIPCSession:
-    def __init__(self):
+    def __init__(self, *, camera_frame_dir: Path | None = None):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.socket_path = self.root / "ipc" / "backend.sock"
         self.app_support = self.root / "app-support"
-        self.server = BackendServer(self.socket_path, self.app_support)
+        self.camera_frame_dir = camera_frame_dir or (self.root / "group" / "CameraFrames")
+        self.server = BackendServer(self.socket_path, self.app_support, self.camera_frame_dir)
         self.task: asyncio.Task | None = None
 
     async def start(self) -> None:
@@ -337,6 +338,60 @@ class BackendIPCTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stats_event["params"]["previewFps"], 25.0)
         self.assertEqual(stats_event["params"]["queueDepth"], 1)
 
+    async def test_start_session_writes_camera_frame_feed_when_enabled(self) -> None:
+        avatar_dir = self.session.app_support / "avatars" / "me"
+        avatar_dir.mkdir(parents=True)
+        (avatar_dir / "metadata.json").write_text("{}")
+
+        def fake_run_camera(opts):
+            frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+            frame[:, :, 0] = 10
+            frame[:, :, 1] = 20
+            frame[:, :, 2] = 30
+            opts.frame_callback(frame)
+            while not opts.stop_event.is_set():
+                time.sleep(0.01)
+            return {"displayed": 1}
+
+        with mock.patch.object(backend_module, "run_camera", side_effect=fake_run_camera):
+            await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "me", "virtualCamera": True}})
+            messages = await _read_until_response(self.reader, "start")
+            self.assertEqual(messages[-1]["result"]["virtualCamera"], True)
+            for _ in range(100):
+                metadata_path = self.session.camera_frame_dir / "latest.json"
+                if metadata_path.exists():
+                    metadata = json.loads(metadata_path.read_text())
+                    if metadata.get("state") == "running":
+                        break
+                await asyncio.sleep(0.01)
+            else:
+                self.fail("camera frame metadata was not written")
+
+            frame_path = self.session.camera_frame_dir / metadata["frameFile"]
+            self.assertTrue(frame_path.exists())
+            self.assertEqual(metadata["width"], 1280)
+            self.assertEqual(metadata["height"], 720)
+            self.assertEqual(metadata["pixelFormat"], "bgra8")
+            self.assertEqual(metadata["bytesPerRow"], 1280 * 4)
+            self.assertEqual(frame_path.stat().st_size, 1280 * 720 * 4)
+            self.assertEqual(frame_path.read_bytes()[:4], bytes([10, 20, 30, 255]))
+
+            await _send_json(self.writer, {"id": "stop", "method": "stopSession"})
+            await _read_until_response(self.reader, "stop")
+
+        stopped_metadata = json.loads((self.session.camera_frame_dir / "latest.json").read_text())
+        self.assertEqual(stopped_metadata["state"], "stopped")
+        self.assertGreater(stopped_metadata["sequence"], metadata["sequence"])
+
+    async def test_start_session_rejects_virtual_camera_without_frame_dir(self) -> None:
+        server = BackendServer(self.session.root / "unused.sock", self.session.root / "unused-app-support")
+        avatar_dir = server.avatars_dir / "me"
+        avatar_dir.mkdir(parents=True)
+        (avatar_dir / "metadata.json").write_text("{}")
+        with self.assertRaises(backend_module.ProtocolError) as raised:
+            await server._start_session(mock.Mock(), {"avatarId": "me", "virtualCamera": True})
+        self.assertEqual(raised.exception.code, "cameraFrameFeedUnavailable")
+
     async def test_stop_session_signals_preview_worker(self) -> None:
         avatar_dir = self.session.app_support / "avatars" / "me"
         avatar_dir.mkdir(parents=True)
@@ -392,6 +447,7 @@ class CLITests(unittest.TestCase):
         self.assertEqual(args.command, "backend")
         self.assertEqual(args.socket, Path("/tmp/ms.sock"))
         self.assertEqual(args.app_support, Path("/tmp/ms-app"))
+        self.assertIsNone(args.camera_frame_dir)
 
     def test_list_devices_cli_still_prints_human_readable_output(self) -> None:
         stdout = io.StringIO()

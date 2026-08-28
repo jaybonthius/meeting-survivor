@@ -30,6 +30,7 @@ final class AppModel: ObservableObject {
         }
     }
     private var didStartBackend = false
+    private var cameraFrameFeedAvailable = false
     private var latestPreviewSequence = 0
 
     var selectedAvatarName: String {
@@ -52,7 +53,12 @@ final class AppModel: ObservableObject {
         do {
             let appSupportURL = try AppStoragePaths.appSupportURL()
             let socketURL = try AppStoragePaths.backendSocketURL()
-            let process = BackendProcess(projectRoot: AppStoragePaths.projectRootURL(), socketURL: socketURL, appSupportURL: appSupportURL)
+            let cameraFrameDirectoryURL = AppStoragePaths.cameraFrameDirectoryURL()
+            cameraFrameFeedAvailable = cameraFrameDirectoryURL != nil
+            if cameraFrameDirectoryURL == nil {
+                cameraStatus = "Camera app group unavailable; signing required"
+            }
+            let process = BackendProcess(projectRoot: AppStoragePaths.projectRootURL(), socketURL: socketURL, appSupportURL: appSupportURL, cameraFrameDirectoryURL: cameraFrameDirectoryURL)
             try process.start()
             backendProcess = process
             try await process.waitForSocket()
@@ -164,7 +170,8 @@ final class AppModel: ObservableObject {
                 avatarId: selectedAvatarID,
                 inputDeviceId: selectedInputDeviceID.nilIfEmpty,
                 outputDeviceId: selectedOutputDeviceID.nilIfEmpty,
-                audioDelayMs: audioDelayMs
+                audioDelayMs: audioDelayMs,
+                virtualCamera: cameraFrameFeedAvailable
             )
             applySessionState(state)
             activityStatus = "Session started"
