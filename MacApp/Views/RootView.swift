@@ -15,7 +15,7 @@ struct RootView: View {
             await model.startBackendIfNeeded()
         }
         .onDisappear {
-            model.stopBackend()
+            model.stopAppServiceForExit()
         }
     }
 }

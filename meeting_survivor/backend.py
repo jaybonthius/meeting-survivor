@@ -5,6 +5,7 @@ import json
 import logging
 import stat
 import threading
+import time
 from itertools import count
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,18 @@ class BackendServer:
         self._writer_lock = asyncio.Lock()
         self._operation_counter = count(1)
         self._operations: dict[str, threading.Event] = {}
+        self._session: dict[str, Any] = {
+            "state": "stopped",
+            "activeAvatarId": None,
+            "inputDeviceId": None,
+            "outputDeviceId": None,
+            "virtualCamera": False,
+            "virtualMicrophone": False,
+            "precision": "q8",
+            "generatedFps": 12.5,
+            "audioDelayMs": 400,
+            "startedAt": None,
+        }
         self._owns_socket = False
 
     async def start(self) -> None:
@@ -105,6 +118,16 @@ class BackendServer:
             return await self._prepare_avatar(writer, params)
         if method == "cancelOperation":
             return self._cancel_operation(params)
+        if method == "startSession":
+            return await self._start_session(writer, params)
+        if method == "stopSession":
+            return await self._stop_session(writer)
+        if method == "getSessionState":
+            return self._session_state()
+        if method == "setActiveAvatar":
+            return await self._set_active_avatar(writer, params)
+        if method == "setAudioDelay":
+            return await self._set_audio_delay(writer, params)
         if method == "shutdown":
             self._cancel_all_operations()
             self._stop_event.set()
@@ -206,6 +229,83 @@ class BackendServer:
         await self._write_message(writer, event("prepareCompleted", **result))
         return result
 
+    async def _start_session(self, writer: asyncio.StreamWriter, params: dict[str, Any]) -> dict[str, Any]:
+        avatar_id = params.get("avatarId") or self._session.get("activeAvatarId")
+        if not isinstance(avatar_id, str) or not avatar_id:
+            raise ProtocolError("invalidParams", "avatarId must be a prepared avatar id")
+        avatar_id = self._require_ready_avatar(avatar_id)
+        input_device_id = self._optional_string_param(params, "inputDeviceId")
+        output_device_id = self._optional_string_param(params, "outputDeviceId")
+        precision = self._choice_param(params, "precision", set(MODEL_REPOS), self._session["precision"])
+        generated_fps = self._optional_float_param(params, "generatedFps", self._session["generatedFps"], minimum=0.0)
+        audio_delay_ms = self._int_param(params, "audioDelayMs", self._session["audioDelayMs"], minimum=0)
+        virtual_camera = self._bool_param(params, "virtualCamera", False)
+        virtual_microphone = self._bool_param(params, "virtualMicrophone", False)
+
+        self._session.update(
+            {
+                "state": "running",
+                "activeAvatarId": avatar_id,
+                "inputDeviceId": input_device_id,
+                "outputDeviceId": output_device_id,
+                "virtualCamera": virtual_camera,
+                "virtualMicrophone": virtual_microphone,
+                "precision": precision,
+                "generatedFps": generated_fps,
+                "audioDelayMs": audio_delay_ms,
+                "startedAt": self._session.get("startedAt") or time.time(),
+            }
+        )
+        state = self._session_state()
+        await self._write_message(writer, event("sessionState", **state))
+        await self._write_message(writer, event("sessionStats", **self._session_stats()))
+        return state
+
+    async def _stop_session(self, writer: asyncio.StreamWriter) -> dict[str, Any]:
+        self._session["state"] = "stopped"
+        self._session["startedAt"] = None
+        state = self._session_state()
+        await self._write_message(writer, event("sessionState", **state))
+        await self._write_message(writer, event("sessionStats", **self._session_stats()))
+        return state
+
+    async def _set_active_avatar(self, writer: asyncio.StreamWriter, params: dict[str, Any]) -> dict[str, Any]:
+        avatar_id = params.get("avatarId")
+        if not isinstance(avatar_id, str) or not avatar_id:
+            raise ProtocolError("invalidParams", "avatarId must be a prepared avatar id")
+        self._session["activeAvatarId"] = self._require_ready_avatar(avatar_id)
+        state = self._session_state()
+        await self._write_message(writer, event("sessionState", **state))
+        return state
+
+    async def _set_audio_delay(self, writer: asyncio.StreamWriter, params: dict[str, Any]) -> dict[str, Any]:
+        if "audioDelayMs" not in params:
+            raise ProtocolError("invalidParams", "audioDelayMs is required")
+        self._session["audioDelayMs"] = self._int_param(params, "audioDelayMs", 0, minimum=0)
+        state = self._session_state()
+        await self._write_message(writer, event("sessionState", **state))
+        return state
+
+    def _session_state(self) -> dict[str, Any]:
+        return dict(self._session)
+
+    def _session_stats(self) -> dict[str, Any]:
+        return {
+            "state": self._session["state"],
+            "previewFps": 0.0,
+            "generatedFps": 0.0,
+            "queueDepth": 0,
+            "droppedJobs": 0,
+            "renderMs": 0.0,
+        }
+
+    def _require_ready_avatar(self, value: Any) -> str:
+        avatar_id = self._avatar_name(value)
+        matches = [avatar for avatar in self._list_avatars() if avatar["id"] == avatar_id]
+        if not matches or matches[0]["status"] != "ready":
+            raise ProtocolError("invalidParams", "avatarId must reference a prepared avatar")
+        return avatar_id
+
     def _cancel_operation(self, params: dict[str, Any]) -> dict[str, Any]:
         operation_id = params.get("operationId")
         if not isinstance(operation_id, str) or not operation_id:
@@ -257,6 +357,14 @@ class BackendServer:
         value = params.get(name, default)
         if not isinstance(value, str) or value not in choices:
             raise ProtocolError("invalidParams", f"{name} must be one of: {', '.join(sorted(choices))}")
+        return value
+
+    def _optional_string_param(self, params: dict[str, Any], name: str) -> str | None:
+        value = params.get(name)
+        if value is None:
+            return None
+        if not isinstance(value, str) or not value:
+            raise ProtocolError("invalidParams", f"{name} must be a non-empty string when provided")
         return value
 
     def _required_path(self, params: dict[str, Any], name: str) -> Path:

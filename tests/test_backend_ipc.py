@@ -28,6 +28,13 @@ async def _send_json(writer: asyncio.StreamWriter, payload: dict) -> None:
     await writer.drain()
 
 
+async def _read_until_response(reader: asyncio.StreamReader, request_id: str) -> list[dict]:
+    messages = []
+    while not any(message.get("id") == request_id for message in messages):
+        messages.append(await _read_json(reader))
+    return messages
+
+
 class BackendIPCSession:
     def __init__(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -222,6 +229,58 @@ class BackendIPCTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(cancel_response["result"]["cancelled"])
         self.assertEqual(failed["params"]["code"], "operationCancelled")
         self.assertEqual(prepare_response["error"]["code"], "operationCancelled")
+
+    async def test_get_session_state_returns_defaults(self) -> None:
+        await _send_json(self.writer, {"id": "state", "method": "getSessionState"})
+        response = await _read_json(self.reader)
+        self.assertEqual(response["id"], "state")
+        self.assertEqual(response["result"]["state"], "stopped")
+        self.assertIsNone(response["result"]["activeAvatarId"])
+        self.assertEqual(response["result"]["audioDelayMs"], 400)
+
+    async def test_start_stop_session_and_setters_emit_session_events(self) -> None:
+        avatar_dir = self.session.app_support / "avatars" / "me"
+        avatar_dir.mkdir(parents=True)
+        (avatar_dir / "metadata.json").write_text("{}")
+
+        await _send_json(self.writer, {"id": "avatar", "method": "setActiveAvatar", "params": {"avatarId": "me"}})
+        avatar_messages = await _read_until_response(self.reader, "avatar")
+        self.assertIn("sessionState", {m["params"]["type"] for m in avatar_messages if m.get("method") == "event"})
+        self.assertEqual(avatar_messages[-1]["result"]["activeAvatarId"], "me")
+
+        await _send_json(self.writer, {"id": "delay", "method": "setAudioDelay", "params": {"audioDelayMs": 450}})
+        delay_messages = await _read_until_response(self.reader, "delay")
+        self.assertEqual(delay_messages[-1]["result"]["audioDelayMs"], 450)
+
+        await _send_json(
+            self.writer,
+            {
+                "id": "start",
+                "method": "startSession",
+                "params": {"avatarId": "me", "inputDeviceId": "mic-1", "outputDeviceId": "out-1", "audioDelayMs": 500},
+            },
+        )
+        start_messages = await _read_until_response(self.reader, "start")
+        event_types = {m["params"]["type"] for m in start_messages if m.get("method") == "event"}
+        start_response = start_messages[-1]
+        self.assertIn("sessionState", event_types)
+        self.assertIn("sessionStats", event_types)
+        self.assertEqual(start_response["result"]["state"], "running")
+        self.assertEqual(start_response["result"]["inputDeviceId"], "mic-1")
+        self.assertEqual(start_response["result"]["outputDeviceId"], "out-1")
+        self.assertEqual(start_response["result"]["audioDelayMs"], 500)
+        self.assertIsInstance(start_response["result"]["startedAt"], float)
+
+        await _send_json(self.writer, {"id": "stop", "method": "stopSession"})
+        stop_messages = await _read_until_response(self.reader, "stop")
+        self.assertEqual(stop_messages[-1]["result"]["state"], "stopped")
+        self.assertIsNone(stop_messages[-1]["result"]["startedAt"])
+
+    async def test_start_session_rejects_unprepared_avatar(self) -> None:
+        await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "missing"}})
+        response = await _read_json(self.reader)
+        self.assertEqual(response["id"], "start")
+        self.assertEqual(response["error"]["code"], "invalidParams")
 
     async def test_shutdown_closes_server(self) -> None:
         await _send_json(self.writer, {"id": "6", "method": "shutdown"})

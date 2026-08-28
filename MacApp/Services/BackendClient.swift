@@ -87,7 +87,7 @@ final class BackendClient: @unchecked Sendable {
     }
 
     func handshake() async throws -> HandshakeResult {
-        let result = try await request(method: "handshake", params: ["protocolVersion": .number(1)])
+        let result = try await request(method: "handshake", params: ["protocolVersion": .int(1)])
         return try decode(HandshakeResult.self, from: result, method: "handshake")
     }
 
@@ -104,6 +104,45 @@ final class BackendClient: @unchecked Sendable {
     func prepareAvatar(videoPath: String) async throws -> PrepareAvatarResult {
         let result = try await request(method: "prepareAvatar", params: ["videoPath": .string(videoPath)])
         return try decode(PrepareAvatarResult.self, from: result, method: "prepareAvatar")
+    }
+
+    func getSessionState() async throws -> SessionStateResult {
+        let result = try await request(method: "getSessionState")
+        return try decode(SessionStateResult.self, from: result, method: "getSessionState")
+    }
+
+    func startSession(avatarId: String, inputDeviceId: String?, outputDeviceId: String?, audioDelayMs: Int) async throws -> SessionStateResult {
+        var params: [String: JSONValue] = [
+            "avatarId": .string(avatarId),
+            "audioDelayMs": .int(audioDelayMs),
+            "generatedFps": .number(12.5),
+            "precision": .string("q8"),
+            "virtualCamera": .bool(false),
+            "virtualMicrophone": .bool(false),
+        ]
+        if let inputDeviceId, !inputDeviceId.isEmpty {
+            params["inputDeviceId"] = .string(inputDeviceId)
+        }
+        if let outputDeviceId, !outputDeviceId.isEmpty {
+            params["outputDeviceId"] = .string(outputDeviceId)
+        }
+        let result = try await request(method: "startSession", params: params)
+        return try decode(SessionStateResult.self, from: result, method: "startSession")
+    }
+
+    func stopSession() async throws -> SessionStateResult {
+        let result = try await request(method: "stopSession")
+        return try decode(SessionStateResult.self, from: result, method: "stopSession")
+    }
+
+    func setActiveAvatar(_ avatarId: String) async throws -> SessionStateResult {
+        let result = try await request(method: "setActiveAvatar", params: ["avatarId": .string(avatarId)])
+        return try decode(SessionStateResult.self, from: result, method: "setActiveAvatar")
+    }
+
+    func setAudioDelay(ms: Int) async throws -> SessionStateResult {
+        let result = try await request(method: "setAudioDelay", params: ["audioDelayMs": .int(ms)])
+        return try decode(SessionStateResult.self, from: result, method: "setAudioDelay")
     }
 
     private func request(method: String, params: [String: JSONValue] = [:]) async throws -> JSONValue {
