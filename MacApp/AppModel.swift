@@ -263,6 +263,8 @@ final class AppModel: ObservableObject {
             }
         case "previewFrame":
             loadPreviewFrame(from: event)
+        case "error":
+            activityStatus = "Session failed: \(event.message ?? "unknown backend error")"
         default:
             activityStatus = event.type
         }

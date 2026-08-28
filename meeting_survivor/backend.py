@@ -397,12 +397,20 @@ class BackendServer:
             return
         self._session["state"] = "stopped"
         self._session["startedAt"] = None
+        if self._session_stop is not None:
+            self._session_stop.set()
+            self._session_stop = None
+        if self._preview_sender_task is not None:
+            self._preview_sender_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._preview_sender_task
+            self._preview_sender_task = None
         if self._camera_frame_writer is not None:
             await asyncio.to_thread(self._camera_frame_writer.clear)
             self._camera_frame_writer = None
-        await self._write_message(writer, event("error", severity="recoverable", message=str(exc) or exc.__class__.__name__))
         await self._write_message(writer, event("sessionState", **self._session_state()))
         await self._write_message(writer, event("sessionStats", **self._session_stats()))
+        await self._write_message(writer, event("error", severity="recoverable", message=str(exc) or exc.__class__.__name__))
 
     async def _send_preview_frames(self, writer: asyncio.StreamWriter, generation: int, stop_event: threading.Event) -> None:
         sent_sequence = 0

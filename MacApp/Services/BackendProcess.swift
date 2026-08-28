@@ -23,6 +23,7 @@ final class BackendProcess {
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
+    private var logSink: BackendLogSink?
 
     init(projectRoot: URL, socketURL: URL, appSupportURL: URL, cameraFrameDirectoryURL: URL?) {
         self.projectRoot = projectRoot
@@ -45,6 +46,7 @@ final class BackendProcess {
         if FileManager.default.fileExists(atPath: socketURL.path) {
             try FileManager.default.removeItem(at: socketURL)
         }
+        let logSink = try BackendLogSink(logsDirectoryURL: appSupportURL.appending(path: "logs"))
 
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -69,13 +71,20 @@ final class BackendProcess {
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe
         process.standardError = stderrPipe
-        stdoutPipe.fileHandleForReading.readabilityHandler = Self.logHandler(prefix: "backend stdout")
-        stderrPipe.fileHandleForReading.readabilityHandler = Self.logHandler(prefix: "backend stderr")
+        stdoutPipe.fileHandleForReading.readabilityHandler = logSink.handler(prefix: "backend stdout")
+        stderrPipe.fileHandleForReading.readabilityHandler = logSink.handler(prefix: "backend stderr")
+        logSink.writeLine("backend launch: \(arguments.joined(separator: " "))")
 
-        try process.run()
+        do {
+            try process.run()
+        } catch {
+            logSink.close()
+            throw error
+        }
         self.process = process
         self.stdoutPipe = stdoutPipe
         self.stderrPipe = stderrPipe
+        self.logSink = logSink
     }
 
     func waitForSocket(timeoutSeconds: TimeInterval = 10) async throws {
@@ -101,6 +110,9 @@ final class BackendProcess {
             process?.waitUntilExit()
             writeStoppedCameraFrameMetadata()
         }
+        logSink?.writeLine("backend stopped")
+        logSink?.close()
+        logSink = nil
         process = nil
         try? FileManager.default.removeItem(at: socketURL)
     }
@@ -152,14 +164,56 @@ final class BackendProcess {
         .compactMap { $0 }
         .joined(separator: ":")
         environment["PATH"] = path
+        environment["PYTHONFAULTHANDLER"] = "1"
+        environment["PYTHONUNBUFFERED"] = "1"
         return environment
     }
+}
 
-    private static func logHandler(prefix: String) -> @Sendable (FileHandle) -> Void {
-        { handle in
-            let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            NSLog("MeetingSurvivor \(prefix): \(text.trimmingCharacters(in: .whitespacesAndNewlines))")
+private final class BackendLogSink: @unchecked Sendable {
+    private let url: URL
+    private let handle: FileHandle
+    private let lock = NSLock()
+
+    init(logsDirectoryURL: URL) throws {
+        try FileManager.default.createDirectory(at: logsDirectoryURL, withIntermediateDirectories: true)
+        url = logsDirectoryURL.appending(path: "backend.log")
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
         }
+        handle = try FileHandle(forWritingTo: url)
+        try handle.seekToEnd()
+        writeLine("---- backend log opened at \(Self.timestamp()) ----")
+    }
+
+    func handler(prefix: String) -> @Sendable (FileHandle) -> Void {
+        { [weak self] fileHandle in
+            self?.write(prefix: prefix, data: fileHandle.availableData)
+        }
+    }
+
+    func write(prefix: String, data: Data) {
+        guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+        NSLog("MeetingSurvivor \(prefix): \(text.trimmingCharacters(in: .whitespacesAndNewlines))")
+        writeLine(text.split(separator: "\n", omittingEmptySubsequences: false).map { "\(prefix): \($0)" }.joined(separator: "\n"))
+    }
+
+    func writeLine(_ line: String) {
+        let entry = "\(Self.timestamp()) \(line)\n"
+        guard let data = entry.data(using: .utf8) else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        _ = try? handle.seekToEnd()
+        try? handle.write(contentsOf: data)
+    }
+
+    func close() {
+        lock.lock()
+        defer { lock.unlock() }
+        try? handle.close()
+    }
+
+    private static func timestamp() -> String {
+        ISO8601DateFormatter().string(from: Date())
     }
 }

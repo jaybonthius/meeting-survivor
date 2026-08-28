@@ -43,6 +43,14 @@ def list_audio_devices_data() -> list[dict]:
     return records
 
 
+def sounddevice_device_identifier(device: str | int | None) -> str | int | None:
+    if isinstance(device, str):
+        stripped = device.strip()
+        if stripped.isdecimal():
+            return int(stripped)
+    return device
+
+
 def mono_float32(samples: np.ndarray) -> np.ndarray:
     arr = np.asarray(samples, dtype=np.float32)
     if arr.ndim == 2:
@@ -111,6 +119,8 @@ class LiveAudio:
     rolling_seconds: float = 3.0
 
     def __post_init__(self):
+        self.input_device = sounddevice_device_identifier(self.input_device)
+        self.output_device = sounddevice_device_identifier(self.output_device)
         self.input_rate = int(sd.query_devices(self.input_device, "input")["default_samplerate"])
         if self.output_device is None:
             self.output_rate = self.input_rate

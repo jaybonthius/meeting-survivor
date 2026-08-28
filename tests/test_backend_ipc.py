@@ -287,6 +287,34 @@ class BackendIPCTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stop_messages[-1]["result"]["state"], "stopped")
         self.assertIsNone(stop_messages[-1]["result"]["startedAt"])
 
+    async def test_session_runtime_failure_reports_error_after_stopped_state(self) -> None:
+        avatar_dir = self.session.app_support / "avatars" / "me"
+        avatar_dir.mkdir(parents=True)
+        (avatar_dir / "metadata.json").write_text("{}")
+
+        def fake_run_camera(opts):
+            raise ValueError("No input device matching '6'")
+
+        with (
+            mock.patch.object(backend_module, "run_camera", side_effect=fake_run_camera),
+            mock.patch.object(backend_module.logging, "exception"),
+        ):
+            await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "me", "inputDeviceId": "6"}})
+            messages = []
+            while not any(m.get("method") == "event" and m["params"]["type"] == "error" for m in messages):
+                messages.append(await _read_json(self.reader))
+
+        stopped_index = next(
+            index
+            for index, message in enumerate(messages)
+            if message.get("method") == "event" and message["params"]["type"] == "sessionState" and message["params"]["state"] == "stopped"
+        )
+        error_index = next(index for index, message in enumerate(messages) if message.get("method") == "event" and message["params"]["type"] == "error")
+        self.assertLess(stopped_index, error_index)
+        self.assertEqual(messages[error_index]["params"]["message"], "No input device matching '6'")
+        self.assertEqual(self.session.server._session["state"], "stopped")
+        self.assertIsNone(self.session.server._preview_sender_task)
+
     async def test_start_session_rejects_unprepared_avatar(self) -> None:
         await _send_json(self.writer, {"id": "start", "method": "startSession", "params": {"avatarId": "missing"}})
         response = await _read_json(self.reader)
