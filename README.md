@@ -36,6 +36,8 @@ Useful app diagnostics are written to `~/Library/Application Support/Meeting Sur
 
 ## Manual setup
 
+Python 3.14 is required; Python 3.14.7 is the tested version. The committed `.python-version` makes a current `uv` select Python 3.14 automatically. If `uv` offers only a Python 3.14 prerelease, update `uv` before syncing.
+
 1. Install system apps:
    - OBS Studio
    - BlackHole 2ch

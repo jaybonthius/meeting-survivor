@@ -3,7 +3,7 @@ name = "meeting-survivor"
 version = "0.1.0"
 description = "Local MuseTalk/MLX talking-head camera preview for OBS Virtual Camera"
 readme = "README.md"
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.14,<3.15"
 dependencies = [
   "huggingface-hub>=0.24",
   "musetalk-mlx @ git+https://github.com/xocialize/musetalk-mlx.git@c6eb30ebd1ed4d043983209813370153de9346bf",
